@@ -35,40 +35,6 @@ The system consists of three main components:
 9. Bot processes audio through AI pipeline (STT → LLM → TTS)
 ```
 
-## Key Differences from Twilio Implementation
-
-### 1. Authentication
-- **Twilio**: Uses Account SID and Auth Token
-- **Plivo**: Uses Auth ID and Auth Token
-
-### 2. API Structure
-- **Twilio**: Uses `twilio.rest.Client`
-- **Plivo**: Uses `plivo.RestClient`
-
-### 3. Making Calls
-**Twilio:**
-```python
-call = twilio_client.calls.create(
-    from_=from_number,
-    to=to_number,
-    twiml=twiml_response
-)
-```
-
-**Plivo:**
-```python
-call = plivo_client.calls.create(
-    from_=from_number,
-    to_=to_number,  # Note the underscore
-    answer_url=answer_url,
-    answer_method="POST"
-)
-```
-
-### 4. Call Control
-- **Twilio**: Uses TwiML (XML format)
-- **Plivo**: Uses Plivo XML (similar but different element names)
-
 ## Prerequisites
 
 1. **Plivo Account**
