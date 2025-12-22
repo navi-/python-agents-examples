@@ -22,8 +22,8 @@ A voice AI agent built with Pipecat and Plivo that can handle phone calls using 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/plivo-voice-agent.git
-cd plivo-voice-agent
+git clone https://github.com/plivo/python-agents-examples.git
+cd python-agents-examples/pipecat-plivo
 ```
 
 2. Create virtual environment:
@@ -69,7 +69,7 @@ ngrok http 8080
 
 ## Project Structure
 
-plivo-voice-agent/
+pipecat-plivo/
 ├── voice_agent.py       # Main application
 ├── .env                 # Environment variables (not in git)
 ├── .env.example         # Example env file

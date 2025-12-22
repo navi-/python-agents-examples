@@ -86,8 +86,8 @@ This guide provides step-by-step instructions for setting up the Daily Plivo Pho
 ### 1. Clone or Download the Repository
 
 ```bash
-git clone <repository-url>
-cd daily-plivo
+git clone https://github.com/plivo/python-agents-examples.git
+cd python-agents-examples/daily-plivo
 ```
 
 Or download and extract the project files.
