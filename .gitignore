@@ -1,0 +1,9 @@
+# Shared binaries for voice agent testing
+ffmpeg
+ffprobe
+
+# Downloaded archives
+*.zip
+
+# OS files
+.DS_Store
