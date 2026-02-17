@@ -25,8 +25,8 @@ from utils import (
 )
 
 app = FastAPI(
-    title="Grok-Plivo Voice Agent (Outbound)",
-    description="Outbound voice agent using xAI Grok with Plivo telephony",
+    title="Gemini-Plivo Voice Agent (Outbound)",
+    description="Outbound voice agent using Google Gemini Live API with Plivo telephony",
     version="0.1.0",
 )
 
@@ -44,7 +44,7 @@ async def health_check() -> dict:
     phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
     return {
         "status": "ok",
-        "service": "grok-plivo-voice-agent-outbound",
+        "service": "gemini-plivo-voice-agent-outbound",
         "phone_number": f"+{phone}" if phone else "not configured",
     }
 
@@ -100,7 +100,8 @@ async def outbound_initiate(
         else:
             request_uuid = getattr(call_response, "request_uuid", "")
         call_manager.update_status(
-            record.call_id, "ringing",
+            record.call_id,
+            "ringing",
             plivo_request_uuid=request_uuid,
         )
         logger.info(
@@ -140,6 +141,8 @@ async def outbound_answer_webhook(
     from_number = From
     to_number = To
 
+    request_uuid = ""
+
     if request.method == "POST":
         try:
             form_data = await request.form()
@@ -147,15 +150,23 @@ async def outbound_answer_webhook(
             call_uuid = call_uuid or str(form_data.get("CallUUID", ""))
             from_number = from_number or str(form_data.get("From", ""))
             to_number = to_number or str(form_data.get("To", ""))
+            request_uuid = str(form_data.get("RequestUUID", ""))
         except Exception:
             pass
 
     logger.info(f"Outbound call answered: call_id={call_id}, CallUUID={call_uuid}, To={to_number}")
 
-    # Update call record
+    # Look up call record by call_id (from query string) or by Plivo
+    # RequestUUID (available when Plivo posts webhook data)
+    if not call_id and request_uuid:
+        record = call_manager.get_call_by_request_uuid(request_uuid)
+        if record:
+            call_id = record.call_id
+
     if call_id:
         call_manager.update_status(
-            call_id, "connected",
+            call_id,
+            "connected",
             plivo_call_uuid=call_uuid,
             connected_at=datetime.utcnow(),
         )
@@ -206,7 +217,8 @@ async def outbound_hangup_webhook(request: Request) -> Response:
             if record.plivo_call_uuid == call_uuid or record.plivo_request_uuid == call_uuid:
                 outcome = determine_outcome(hangup_cause, duration)
                 call_manager.update_status(
-                    record.call_id, "completed",
+                    record.call_id,
+                    "completed",
                     ended_at=datetime.utcnow(),
                     duration=duration,
                     hangup_cause=hangup_cause,
@@ -239,6 +251,8 @@ async def outbound_status(call_id: str) -> dict:
         "created_at": record.created_at.isoformat(),
         "connected_at": record.connected_at.isoformat() if record.connected_at else None,
         "ended_at": record.ended_at.isoformat() if record.ended_at else None,
+        "plivo_call_uuid": record.plivo_call_uuid,
+        "plivo_request_uuid": record.plivo_request_uuid,
     }
 
 
@@ -259,7 +273,8 @@ async def outbound_hangup_call(call_id: str) -> dict:
         client = plivo.RestClient(auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN)
         client.calls.delete(record.plivo_call_uuid)
         call_manager.update_status(
-            call_id, "completed",
+            call_id,
+            "completed",
             ended_at=datetime.utcnow(),
             outcome="success",
         )
@@ -368,7 +383,7 @@ async def websocket_endpoint(
 
 def main() -> None:
     """Run the outbound server."""
-    logger.info(f"Starting Grok-Plivo Outbound Voice Agent on port {SERVER_PORT}")
+    logger.info(f"Starting Gemini-Plivo Outbound Voice Agent on port {SERVER_PORT}")
     uvicorn.run("outbound.server:app", host="0.0.0.0", port=SERVER_PORT, log_level="info")
 
 

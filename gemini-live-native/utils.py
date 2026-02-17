@@ -4,7 +4,6 @@ This module provides:
 - Configuration loaded from environment variables
 - Phone number normalization
 - Audio format conversion (μ-law <-> PCM, resampling)
-- Silero VAD processor for voice activity detection
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ import phonenumbers
 from dotenv import load_dotenv
 from loguru import logger
 from scipy import signal as scipy_signal
-from silero_vad import load_silero_vad
 
 load_dotenv()
 
@@ -36,23 +34,17 @@ DEFAULT_COUNTRY_CODE = os.getenv("DEFAULT_COUNTRY_CODE", "US")
 # Public URL for webhooks (ngrok URL or production domain)
 PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 
-# xAI / Grok
-XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-3-fast-voice")
-GROK_VOICE = os.getenv("GROK_VOICE", "Sal")
-XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime"
+# Gemini
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Kore")
 
 # Audio format constants
 PLIVO_SAMPLE_RATE = 8000  # Plivo uses 8kHz μ-law
-GROK_SAMPLE_RATE = 24000  # Grok default PCM sample rate
-VAD_SAMPLE_RATE = 16000  # Silero VAD operates at 16kHz
-
-# Silero VAD configuration
-VAD_CHUNK_SAMPLES = 512  # 32ms at 16kHz (Silero expects 512 samples at 16kHz)
-VAD_START_THRESHOLD = 0.5  # Speech probability to trigger speech start
-VAD_END_THRESHOLD = 0.35  # Speech probability below this to consider silence
-VAD_MIN_SILENCE_MS = 300  # Minimum silence duration (ms) to trigger speech end
-VAD_PRE_SPEECH_PAD_MS = 150  # Audio to keep before speech start for context
+PLIVO_CHUNK_SIZE = 160  # 20ms at 8kHz μ-law (one Plivo packet)
+GEMINI_INPUT_RATE = 16000  # Gemini expects 16kHz PCM input
+GEMINI_OUTPUT_RATE = 24000  # Gemini outputs 24kHz PCM
+AUDIO_CHUNK_SIZE = 1024  # Bytes per chunk sent to Gemini
 
 # =============================================================================
 # Phone Number Utilities
@@ -342,14 +334,33 @@ _ULAW_DECODE_TABLE = np.array(
 
 
 def ulaw_to_pcm(ulaw_data: bytes) -> bytes:
-    """Convert μ-law encoded audio to 16-bit PCM."""
+    """Convert μ-law encoded audio to 16-bit PCM.
+
+    μ-law is a companding algorithm used in telephony (G.711 standard).
+    This replaces the deprecated audioop.ulaw2lin function.
+
+    Args:
+        ulaw_data: μ-law encoded audio bytes
+
+    Returns:
+        16-bit PCM audio bytes
+    """
     ulaw_samples = np.frombuffer(ulaw_data, dtype=np.uint8)
     pcm_samples = _ULAW_DECODE_TABLE[ulaw_samples]
     return pcm_samples.tobytes()
 
 
 def pcm_to_ulaw(pcm_data: bytes) -> bytes:
-    """Convert 16-bit PCM audio to μ-law encoding."""
+    """Convert 16-bit PCM audio to μ-law encoding.
+
+    This replaces the deprecated audioop.lin2ulaw function.
+
+    Args:
+        pcm_data: 16-bit PCM audio bytes
+
+    Returns:
+        μ-law encoded audio bytes
+    """
     BIAS = 0x84
     CLIP = 32635
 
@@ -358,9 +369,11 @@ def pcm_to_ulaw(pcm_data: bytes) -> bytes:
     pcm_samples = np.where(sign != 0, -pcm_samples, pcm_samples)
     pcm_samples = np.clip(pcm_samples, 0, CLIP) + BIAS
 
+    # Find segment using vectorized log2
     segment = np.floor(np.log2(pcm_samples >> 7)).astype(np.int32)
     segment = np.clip(segment, 0, 7)
 
+    # Build μ-law byte
     ulaw = sign | ((segment << 4) | ((pcm_samples >> (segment + 3)) & 0x0F))
     ulaw = ~ulaw & 0xFF
 
@@ -368,7 +381,16 @@ def pcm_to_ulaw(pcm_data: bytes) -> bytes:
 
 
 def resample_audio(audio_data: bytes, input_rate: int, output_rate: int) -> bytes:
-    """Resample audio from one sample rate to another."""
+    """Resample audio from one sample rate to another.
+
+    Args:
+        audio_data: Raw PCM audio bytes (16-bit signed integers)
+        input_rate: Source sample rate in Hz
+        output_rate: Target sample rate in Hz
+
+    Returns:
+        Resampled audio as bytes
+    """
     if input_rate == output_rate:
         return audio_data
 
@@ -379,98 +401,13 @@ def resample_audio(audio_data: bytes, input_rate: int, output_rate: int) -> byte
     return np.clip(resampled, -32768, 32767).astype(np.int16).tobytes()
 
 
-def plivo_to_grok(mulaw_8k: bytes) -> bytes:
-    """Convert Plivo audio (μ-law 8kHz) to Grok format (PCM16 24kHz)."""
+def plivo_to_gemini(mulaw_8k: bytes) -> bytes:
+    """Convert Plivo audio (μ-law 8kHz) to Gemini format (PCM16 16kHz)."""
     pcm_8k = ulaw_to_pcm(mulaw_8k)
-    return resample_audio(pcm_8k, PLIVO_SAMPLE_RATE, GROK_SAMPLE_RATE)
+    return resample_audio(pcm_8k, PLIVO_SAMPLE_RATE, GEMINI_INPUT_RATE)
 
 
-def grok_to_plivo(pcm_24k: bytes) -> bytes:
-    """Convert Grok audio (PCM16 24kHz) to Plivo format (μ-law 8kHz)."""
-    pcm_8k = resample_audio(pcm_24k, GROK_SAMPLE_RATE, PLIVO_SAMPLE_RATE)
+def gemini_to_plivo(pcm_24k: bytes) -> bytes:
+    """Convert Gemini audio (PCM16 24kHz) to Plivo format (μ-law 8kHz)."""
+    pcm_8k = resample_audio(pcm_24k, GEMINI_OUTPUT_RATE, PLIVO_SAMPLE_RATE)
     return pcm_to_ulaw(pcm_8k)
-
-
-def plivo_to_vad(mulaw_8k: bytes) -> np.ndarray:
-    """Convert Plivo audio (μ-law 8kHz) to Silero VAD format (float32 16kHz)."""
-    pcm_8k = ulaw_to_pcm(mulaw_8k)
-    pcm_16k = resample_audio(pcm_8k, PLIVO_SAMPLE_RATE, VAD_SAMPLE_RATE)
-    samples = np.frombuffer(pcm_16k, dtype=np.int16).astype(np.float32)
-    return samples / 32768.0  # Normalize to [-1, 1]
-
-
-# =============================================================================
-# Silero VAD Processor
-# =============================================================================
-
-
-class SileroVADProcessor:
-    """Processes audio frames through Silero VAD for speech detection.
-
-    Accumulates audio in a buffer and runs VAD when enough samples are available.
-    Tracks speech state transitions (silence -> speaking -> silence) to determine
-    when the user has finished a turn.
-    """
-
-    def __init__(self):
-        self._model = load_silero_vad(onnx=True)
-        self._buffer = np.array([], dtype=np.float32)
-        self._is_speaking = False
-        self._silence_frames = 0
-        self._min_silence_frames = int(
-            VAD_MIN_SILENCE_MS / (VAD_CHUNK_SAMPLES / VAD_SAMPLE_RATE * 1000)
-        )
-
-    def reset(self) -> None:
-        """Reset VAD state for a new turn."""
-        self._model.reset_states()
-        self._buffer = np.array([], dtype=np.float32)
-        self._is_speaking = False
-        self._silence_frames = 0
-
-    def process(self, audio_f32: np.ndarray) -> tuple[bool, bool]:
-        """Process audio and return (speech_started, speech_ended) events.
-
-        Args:
-            audio_f32: Float32 audio samples normalized to [-1, 1] at 16kHz.
-
-        Returns:
-            Tuple of (speech_started, speech_ended) booleans. Only one can be
-            True at a time. Both False means no state change.
-        """
-        import torch
-
-        self._buffer = np.concatenate([self._buffer, audio_f32])
-
-        speech_started = False
-        speech_ended = False
-
-        while len(self._buffer) >= VAD_CHUNK_SAMPLES:
-            chunk = self._buffer[:VAD_CHUNK_SAMPLES]
-            self._buffer = self._buffer[VAD_CHUNK_SAMPLES:]
-
-            chunk_tensor = torch.from_numpy(chunk)
-            speech_prob = self._model(chunk_tensor, VAD_SAMPLE_RATE).item()
-
-            if not self._is_speaking:
-                if speech_prob >= VAD_START_THRESHOLD:
-                    self._is_speaking = True
-                    self._silence_frames = 0
-                    speech_started = True
-                    logger.debug(f"VAD: speech started (prob={speech_prob:.2f})")
-            else:
-                if speech_prob < VAD_END_THRESHOLD:
-                    self._silence_frames += 1
-                    if self._silence_frames >= self._min_silence_frames:
-                        self._is_speaking = False
-                        self._silence_frames = 0
-                        speech_ended = True
-                        logger.debug(f"VAD: speech ended (prob={speech_prob:.2f})")
-                else:
-                    self._silence_frames = 0
-
-        return speech_started, speech_ended
-
-    @property
-    def is_speaking(self) -> bool:
-        return self._is_speaking

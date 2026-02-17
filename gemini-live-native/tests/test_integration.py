@@ -35,8 +35,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-# Import audio functions from agent module (replaces deprecated audioop)
-from agent import ulaw_to_pcm, pcm_to_ulaw
+from utils import pcm_to_ulaw, ulaw_to_pcm
 
 load_dotenv()
 
@@ -63,10 +62,10 @@ class TestUnitAudioConversion:
 
     def test_ulaw_to_pcm_conversion(self):
         """Test μ-law to PCM conversion."""
-        ulaw_silence = b'\xff' * 160
+        ulaw_silence = b"\xff" * 160
         pcm_audio = ulaw_to_pcm(ulaw_silence)
 
-        samples = struct.unpack(f'{len(pcm_audio)//2}h', pcm_audio)
+        samples = struct.unpack(f"{len(pcm_audio) // 2}h", pcm_audio)
         avg_amplitude = sum(abs(s) for s in samples) / len(samples)
 
         assert len(pcm_audio) == 320  # 160 samples * 2 bytes
@@ -74,7 +73,7 @@ class TestUnitAudioConversion:
 
     def test_pcm_to_ulaw_conversion(self):
         """Test PCM to μ-law conversion."""
-        pcm_silence = b'\x00' * 320
+        pcm_silence = b"\x00" * 320
         ulaw_audio = pcm_to_ulaw(pcm_silence)
 
         assert len(ulaw_audio) == 160  # Half the size
@@ -85,16 +84,16 @@ class TestUnitAudioConversion:
         for i in range(160):
             sample = int(16000 * math.sin(2 * math.pi * 440 * i / 8000))
             samples.append(sample)
-        pcm_original = struct.pack(f'{len(samples)}h', *samples)
+        pcm_original = struct.pack(f"{len(samples)}h", *samples)
 
         ulaw = pcm_to_ulaw(pcm_original)
         pcm_restored = ulaw_to_pcm(ulaw)
 
-        original_samples = struct.unpack(f'{len(pcm_original)//2}h', pcm_original)
-        restored_samples = struct.unpack(f'{len(pcm_restored)//2}h', pcm_restored)
+        original_samples = struct.unpack(f"{len(pcm_original) // 2}h", pcm_original)
+        restored_samples = struct.unpack(f"{len(pcm_restored) // 2}h", pcm_restored)
 
         # Check correlation (should be > 0.9)
-        correlation = sum(o * r for o, r in zip(original_samples, restored_samples))
+        correlation = sum(o * r for o, r in zip(original_samples, restored_samples, strict=True))
         orig_energy = sum(o * o for o in original_samples)
         rest_energy = sum(r * r for r in restored_samples)
 
@@ -169,7 +168,7 @@ class TestLocalIntegration:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{LOCAL_HTTP_URL}/answer",
-                params={"CallUUID": "test123", "From": "+15551234567", "To": "+16572338892"}
+                params={"CallUUID": "test123", "From": "+15551234567", "To": "+16572338892"},
             )
             assert response.status_code == 200
             assert "application/xml" in response.headers["content-type"]
@@ -186,7 +185,7 @@ class TestLocalIntegration:
         async with websockets.connect(ws_url, close_timeout=2) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())}
+                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())},
             }
             await ws.send(json.dumps(start_event))
 
@@ -216,7 +215,7 @@ class TestLocalIntegration:
         async with websockets.connect(ws_url, close_timeout=2) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())}
+                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())},
             }
             await ws.send(json.dumps(start_event))
 
@@ -230,7 +229,7 @@ class TestLocalIntegration:
                         if payload:
                             audio_chunks.append(base64.b64decode(payload))
                 except asyncio.TimeoutError:
-                    silence = base64.b64encode(b'\xff' * 160).decode()
+                    silence = base64.b64encode(b"\xff" * 160).decode()
                     await ws.send(json.dumps({"event": "media", "media": {"payload": silence}}))
                 except websockets.exceptions.ConnectionClosed:
                     break
@@ -240,9 +239,9 @@ class TestLocalIntegration:
 
         assert len(audio_chunks) > 0, "No audio chunks received"
 
-        combined_audio = b''.join(audio_chunks)
+        combined_audio = b"".join(audio_chunks)
         pcm_audio = ulaw_to_pcm(combined_audio)
-        samples = struct.unpack(f'{len(pcm_audio)//2}h', pcm_audio)
+        samples = struct.unpack(f"{len(pcm_audio) // 2}h", pcm_audio)
 
         rms = (sum(s**2 for s in samples) / len(samples)) ** 0.5
         assert rms > 500, f"Audio RMS {rms} too low - may be silence"

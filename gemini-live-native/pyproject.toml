@@ -1,7 +1,7 @@
 [project]
 name = "gemini-plivo-voice-agent"
 version = "0.1.0"
-description = "Voice agent using Google Gemini Live API with Plivo telephony"
+description = "Voice agent using Google Gemini Live API with Plivo telephony (inbound + outbound)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

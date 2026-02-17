@@ -229,7 +229,8 @@ uv run pytest tests/test_multiturn_voice.py -v -s       # Multi-turn conversatio
 **Requirements for live call tests:**
 - Valid Plivo credentials and phone numbers in `.env`
 - Valid xAI API key in `.env`
-- ngrok installed at `/usr/local/bin/ngrok`
+- `PLIVO_TEST_NUMBER` — a second Plivo number on the same account (acts as caller for inbound tests, destination for outbound tests)
+- ngrok binary available on PATH
 - `faster-whisper` (dev dependency, for transcription verification)
 
 ## Deployment
