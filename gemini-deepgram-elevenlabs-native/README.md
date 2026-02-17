@@ -1,33 +1,41 @@
 # Gemini + Deepgram + ElevenLabs Voice Agent (Native)
 
-A voice agent that uses Google Gemini for conversation, Deepgram for speech-to-text, and ElevenLabs for text-to-speech. This implementation uses direct API integration without any orchestration frameworks.
+A voice agent that uses Google Gemini for LLM reasoning, Deepgram for speech-to-text, ElevenLabs for text-to-speech, and Silero VAD for voice activity detection. This implementation uses direct API integration without any orchestration frameworks, connected via Plivo telephony.
+
+## Features
+
+- Google Gemini LLM for conversational reasoning
+- Deepgram real-time STT via WebSocket
+- ElevenLabs TTS for natural voice synthesis
+- Silero VAD for client-side voice activity detection and barge-in
+- Plivo telephony with bidirectional WebSocket audio streaming
+- Native asyncio orchestration (no frameworks)
+- Inbound and outbound call support
+- 3 concurrent tasks: plivo_rx, deepgram_rx, plivo_tx
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Plivo     │────▶│  Deepgram   │────▶│   Gemini    │
-│  (Phone)    │     │   (STT)     │     │   (LLM)     │
-│             │◀────│             │◀────│             │
-└─────────────┘     └─────────────┘     └─────────────┘
-       │                                       │
-       │            ┌─────────────┐            │
-       └───────────▶│ ElevenLabs  │◀───────────┘
-                    │   (TTS)     │
-                    └─────────────┘
+Plivo (u-law 8kHz) --> Deepgram STT (PCM 8kHz) --> Gemini LLM
+                                                        |
+Plivo (u-law 8kHz) <-- ElevenLabs TTS (PCM 24kHz) <----+
+
+Silero VAD runs on Plivo audio for barge-in detection and turn management.
 ```
 
 **Audio Flow:**
-1. Caller speaks → Plivo captures audio (u-law 8kHz)
-2. Audio converted to PCM → sent to Deepgram for transcription
-3. Transcript sent to Gemini for response generation
-4. Response text sent to ElevenLabs for speech synthesis
-5. TTS audio (PCM 24kHz) converted to u-law 8kHz → sent back to caller
+1. Caller speaks --> Plivo captures audio (u-law 8kHz)
+2. Audio converted to PCM --> sent to Deepgram for transcription
+3. VAD runs in parallel for speech start/end detection
+4. Transcript sent to Gemini for response generation
+5. Response text sent to ElevenLabs for speech synthesis
+6. TTS audio (PCM 24kHz) converted to u-law 8kHz --> sent back to caller
+7. Barge-in: if user speaks during response, audio queue is cleared
 
 ## Prerequisites
 
 - Python 3.10+
-- [uv](https://docs.astral.sh/uv/) package manager (recommended) or pip
+- [uv](https://docs.astral.sh/uv/) package manager
 - [ngrok](https://ngrok.com/) for local development
 - API keys for:
   - [Plivo](https://www.plivo.com/) - Telephony
@@ -37,7 +45,7 @@ A voice agent that uses Google Gemini for conversation, Deepgram for speech-to-t
 
 ## Setup
 
-1. **Clone and navigate to the project:**
+1. **Navigate to the project:**
    ```bash
    cd gemini-deepgram-elevenlabs-native
    ```
@@ -61,9 +69,14 @@ A voice agent that uses Google Gemini for conversation, Deepgram for speech-to-t
 
 6. **Update `PUBLIC_URL`** in your `.env` with the ngrok HTTPS URL.
 
-7. **Run the server:**
+7. **Run the inbound server:**
    ```bash
-   uv run python server.py
+   uv run python -m inbound.server
+   ```
+
+   Or the outbound server:
+   ```bash
+   uv run python -m outbound.server
    ```
 
 8. **Call your Plivo phone number** to test the voice agent.
@@ -72,59 +85,89 @@ A voice agent that uses Google Gemini for conversation, Deepgram for speech-to-t
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PLIVO_AUTH_ID` | Plivo account auth ID | Required |
-| `PLIVO_AUTH_TOKEN` | Plivo account auth token | Required |
-| `PLIVO_PHONE_NUMBER` | Your Plivo phone number | Required |
-| `PUBLIC_URL` | Public URL for webhooks | Required |
 | `GEMINI_API_KEY` | Google AI API key | Required |
 | `GEMINI_MODEL` | Gemini model name | `gemini-2.0-flash` |
 | `DEEPGRAM_API_KEY` | Deepgram API key | Required |
 | `DEEPGRAM_MODEL` | Deepgram model | `nova-2-phonecall` |
 | `ELEVENLABS_API_KEY` | ElevenLabs API key | Required |
-| `ELEVENLABS_VOICE_ID` | ElevenLabs voice ID | Rachel |
+| `ELEVENLABS_VOICE_ID` | ElevenLabs voice ID | `21m00Tcm4TlvDq8ikWAM` |
 | `ELEVENLABS_MODEL` | ElevenLabs model | `eleven_flash_v2_5` |
+| `PLIVO_AUTH_ID` | Plivo account auth ID | Required |
+| `PLIVO_AUTH_TOKEN` | Plivo account auth token | Required |
+| `PLIVO_PHONE_NUMBER` | Your Plivo phone number | Required |
+| `PUBLIC_URL` | Public URL for webhooks | Required |
 | `SERVER_PORT` | Server port | `8000` |
+
+## File Structure
+
+```
+gemini-deepgram-elevenlabs-native/
+|-- inbound/
+|   |-- __init__.py
+|   |-- agent.py              # Voice agent for inbound calls
+|   |-- server.py             # FastAPI: /answer, /ws, /hangup
+|   +-- system_prompt.md      # System prompt for inbound calls
+|-- outbound/
+|   |-- __init__.py
+|   |-- agent.py              # Voice agent + CallManager for outbound
+|   |-- server.py             # FastAPI: /outbound/call, /outbound/ws
+|   +-- system_prompt.md      # System prompt for outbound calls
+|-- utils.py                  # Audio conversion, VAD, phone utils
+|-- tests/
+|   |-- conftest.py
+|   |-- helpers.py
+|   |-- test_integration.py   # Unit + local integration tests
+|   |-- test_e2e_live.py      # E2E with real APIs
+|   |-- test_live_call.py     # Real inbound call test
+|   |-- test_multiturn_voice.py
+|   +-- test_outbound_call.py # Real outbound call test
+|-- pyproject.toml
+|-- .env.example
+|-- Dockerfile
++-- README.md
+```
 
 ## How It Works
 
 ### Components
 
-- **server.py**: FastAPI server handling Plivo webhooks and WebSocket connections
-- **agent.py**: Voice agent implementation with STT, LLM, and TTS integration
+- **utils.py**: Audio format conversion (u-law, PCM, resampling), SileroVADProcessor, phone normalization
+- **inbound/agent.py**: VoiceAgent class with 3 concurrent tasks (plivo_rx, deepgram_rx, plivo_tx)
+- **inbound/server.py**: FastAPI server for inbound call webhooks and WebSocket handling
+- **outbound/agent.py**: VoiceAgent + OutboundCallRecord + CallManager for outbound calls
+- **outbound/server.py**: FastAPI server for outbound call management
 
 ### Audio Format Conversion
 
 - **Plivo**: u-law 8kHz mono (telephony standard)
 - **Deepgram**: Linear PCM 16-bit 8kHz
 - **ElevenLabs**: Linear PCM 16-bit 24kHz
+- **Silero VAD**: Float32 16kHz
 
-The agent handles all necessary conversions between these formats using NumPy and SciPy.
+### VAD and Barge-in
 
-### Conversation Flow
+Client-side Silero VAD runs on every Plivo audio frame:
+- **Speech start** during agent response triggers barge-in (clears audio queue, sends clearAudio)
+- **Speech end** signals turn completion for natural conversation flow
 
-1. Server receives incoming call webhook from Plivo
-2. Returns XML instructing Plivo to open bidirectional WebSocket
-3. Agent connects to Deepgram WebSocket for real-time STT
-4. User speech is transcribed and sent to Gemini
-5. Gemini response is synthesized via ElevenLabs
-6. TTS audio is streamed back to caller through Plivo
+## Testing
 
-## Customization
+```bash
+# Unit tests (offline, no API keys needed)
+uv run pytest tests/test_integration.py -v -k "unit"
 
-### System Prompt
+# Local integration (starts server, needs API keys)
+uv run pytest tests/test_integration.py -v -k "local"
 
-Modify the `DEFAULT_SYSTEM_PROMPT` in `agent.py` or set the `SYSTEM_PROMPT` environment variable.
+# E2E live tests (needs API keys)
+uv run pytest tests/test_e2e_live.py -v -s
 
-### Voice Selection
+# Live call tests (needs Plivo + API keys + ngrok)
+uv run pytest tests/test_live_call.py -v -s
 
-Change `ELEVENLABS_VOICE_ID` in your `.env` file. Browse available voices at [ElevenLabs](https://elevenlabs.io/voice-library).
-
-### STT Model
-
-Change `DEEPGRAM_MODEL` for different accuracy/speed tradeoffs. Options include:
-- `nova-2-phonecall` - Optimized for phone audio
-- `nova-2` - General purpose
-- `nova-2-meeting` - Optimized for meetings
+# Outbound call tests
+uv run pytest tests/test_outbound_call.py -v -s
+```
 
 ## Troubleshooting
 

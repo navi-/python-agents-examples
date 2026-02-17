@@ -1,7 +1,6 @@
-"""Shared configuration, utilities, and audio processing.
+"""Shared utilities and audio processing.
 
 This module provides:
-- Configuration loaded from environment variables
 - Phone number normalization
 - Audio format conversion (μ-law <-> PCM, resampling)
 """
@@ -19,32 +18,15 @@ from scipy import signal as scipy_signal
 load_dotenv()
 
 # =============================================================================
-# Configuration
+# Configuration — only what utils.py functions consume
 # =============================================================================
 
-# Server
-SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
-
-# Plivo credentials
-PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
-PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
-PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
 DEFAULT_COUNTRY_CODE = os.getenv("DEFAULT_COUNTRY_CODE", "US")
 
-# Public URL for webhooks (ngrok URL or production domain)
-PUBLIC_URL = os.getenv("PUBLIC_URL", "")
-
-# Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
-GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Kore")
-
-# Audio format constants
+# Audio sample rates
 PLIVO_SAMPLE_RATE = 8000  # Plivo uses 8kHz μ-law
-PLIVO_CHUNK_SIZE = 160  # 20ms at 8kHz μ-law (one Plivo packet)
 GEMINI_INPUT_RATE = 16000  # Gemini expects 16kHz PCM input
 GEMINI_OUTPUT_RATE = 24000  # Gemini outputs 24kHz PCM
-AUDIO_CHUNK_SIZE = 1024  # Bytes per chunk sent to Gemini
 
 # =============================================================================
 # Phone Number Utilities

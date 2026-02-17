@@ -5,7 +5,7 @@ This is a standalone test script that demonstrates the voice agent
 handling multiple conversation turns with real synthesized speech.
 
 Requirements:
-    - Server running: uv run python server.py
+    - Server running: uv run python -m inbound.server
     - ffmpeg/ffprobe in PATH (for audio conversion)
     - gTTS and pydub installed (included in dev dependencies)
 
@@ -14,25 +14,23 @@ Usage:
     PATH="/path/to/ffmpeg:$PATH" uv run python tests/test_multiturn_voice.py
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import json
 import os
-import sys
 import tempfile
 import time
 import uuid
 
-import numpy as np
 import websockets
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent import pcm_to_ulaw
+from utils import pcm_to_ulaw
 
 
 def generate_tts_audio(text: str) -> bytes | None:
-    """Generate speech audio using Google TTS and convert to μ-law."""
+    """Generate speech audio using Google TTS and convert to mu-law."""
     try:
         from gtts import gTTS
         from pydub import AudioSegment
@@ -40,11 +38,11 @@ def generate_tts_audio(text: str) -> bytes | None:
         print("  gTTS or pydub not available")
         return None
 
-    with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         mp3_path = f.name
 
     try:
-        tts = gTTS(text=text, lang='en')
+        tts = gTTS(text=text, lang="en")
         tts.save(mp3_path)
 
         audio = AudioSegment.from_mp3(mp3_path)
@@ -63,9 +61,12 @@ async def send_audio_and_wait(ws, audio_bytes: bytes, timeout: float = 15.0) -> 
     """Send audio and wait for response."""
     result = {"sent_chunks": 0, "recv_chunks": 0, "recv_bytes": 0, "ttfr": None}
 
-    # Send in 20ms chunks (160 bytes at 8kHz μ-law)
+    # Send in 20ms chunks (160 bytes at 8kHz mu-law)
     chunk_size = 160
-    chunks = [audio_bytes[i:i+chunk_size] for i in range(0, len(audio_bytes), chunk_size)]
+    chunks = [
+        audio_bytes[i : i + chunk_size]
+        for i in range(0, len(audio_bytes), chunk_size)
+    ]
 
     start_time = time.time()
 
@@ -79,7 +80,7 @@ async def send_audio_and_wait(ws, audio_bytes: bytes, timeout: float = 15.0) -> 
     last_received = time.time()
 
     while time.time() - start_time < timeout:
-        silence = base64.b64encode(b'\xff' * 160).decode()
+        silence = base64.b64encode(b"\xff" * 160).decode()
         await ws.send(json.dumps({"event": "media", "media": {"payload": silence}}))
 
         try:
@@ -114,7 +115,7 @@ async def wait_for_greeting(ws, timeout: float = 10.0) -> dict:
     last_received = start_time
 
     while time.time() - start_time < timeout:
-        silence = base64.b64encode(b'\xff' * 160).decode()
+        silence = base64.b64encode(b"\xff" * 160).decode()
         await ws.send(json.dumps({"event": "media", "media": {"payload": silence}}))
 
         try:
@@ -142,7 +143,10 @@ async def wait_for_greeting(ws, timeout: float = 10.0) -> dict:
 
 async def test_multiturn_voice():
     """Test a complete multi-turn voice conversation."""
-    ws_url = "ws://localhost:7860/ws?body=eyJjYWxsX3V1aWQiOiAidGVzdCIsICJmcm9tIjogIisxNTU1MTIzNDU2NyIsICJ0byI6ICIrMTY1NzIzMzg4OTIifQ=="
+    ws_url = (
+        "ws://localhost:8000/ws?body="
+        "eyJjYWxsX3V1aWQiOiAidGVzdCIsICJmcm9tIjogIisxNTU1MTIzNDU2NyIsICJ0byI6ICIrMTY1NzIzMzg4OTIifQ=="
+    )
 
     print("=" * 70)
     print("MULTI-TURN VOICE CONVERSATION TEST")
@@ -157,14 +161,14 @@ async def test_multiturn_voice():
     print("\nGenerating TTS audio...")
     turn_audio = []
     for i, text in enumerate(turns):
-        print(f"  Turn {i+1}: \"{text}\"")
+        print(f'  Turn {i + 1}: "{text}"')
         audio = generate_tts_audio(text)
         if audio is None:
             print("  ERROR: Could not generate TTS audio")
             print("  Make sure ffmpeg is in PATH and gTTS/pydub are installed")
             return
         turn_audio.append((text, audio))
-        print(f"    Generated {len(audio)} bytes ({len(audio)/8000:.1f}s)")
+        print(f"    Generated {len(audio)} bytes ({len(audio) / 8000:.1f}s)")
 
     print("\nConnecting to WebSocket...")
 
@@ -172,10 +176,17 @@ async def test_multiturn_voice():
         async with websockets.connect(ws_url, close_timeout=5) as ws:
             print("Connected\n")
 
-            await ws.send(json.dumps({
-                "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())}
-            }))
+            await ws.send(
+                json.dumps(
+                    {
+                        "event": "start",
+                        "start": {
+                            "callId": str(uuid.uuid4()),
+                            "streamId": str(uuid.uuid4()),
+                        },
+                    }
+                )
+            )
 
             results = []
 
@@ -184,19 +195,27 @@ async def test_multiturn_voice():
             print("-" * 50)
             greeting = await wait_for_greeting(ws)
             results.append(("Greeting", 0, greeting["recv_bytes"], None))
-            print(f"  Received {greeting['recv_chunks']} chunks ({greeting['recv_bytes']} bytes)\n")
+            print(
+                f"  Received {greeting['recv_chunks']} chunks "
+                f"({greeting['recv_bytes']} bytes)\n"
+            )
 
             # Execute conversation turns
             for i, (text, audio) in enumerate(turn_audio):
-                print(f"Turn {i+1}: \"{text}\"")
+                print(f'Turn {i + 1}: "{text}"')
                 print("-" * 50)
 
                 result = await send_audio_and_wait(ws, audio, timeout=20.0)
-                results.append((text[:30], len(audio), result["recv_bytes"], result["ttfr"]))
+                results.append(
+                    (text[:30], len(audio), result["recv_bytes"], result["ttfr"])
+                )
 
                 if result["recv_chunks"] > 0:
                     print(f"  Sent {result['sent_chunks']} chunks")
-                    print(f"  Received {result['recv_chunks']} chunks ({result['recv_bytes']} bytes)")
+                    print(
+                        f"  Received {result['recv_chunks']} chunks "
+                        f"({result['recv_bytes']} bytes)"
+                    )
                     if result["ttfr"]:
                         print(f"  Time to first response: {result['ttfr']:.1f}s")
                 else:
@@ -207,13 +226,17 @@ async def test_multiturn_voice():
             print("=" * 70)
             print("SUMMARY")
             print("=" * 70)
-            print(f"{'Turn':<5} {'Description':<32} {'Sent':>10} {'Recv':>10} {'TTFR':>8}")
+            print(
+                f"{'Turn':<5} {'Description':<32} {'Sent':>10} {'Recv':>10} {'TTFR':>8}"
+            )
             print("-" * 70)
 
             total_recv = 0
             for i, (desc, sent, recv, ttfr) in enumerate(results):
                 ttfr_str = f"{ttfr:.1f}s" if ttfr else "-"
-                print(f"{i:<5} {desc:<32} {sent:>9}B {recv:>9}B {ttfr_str:>8}")
+                print(
+                    f"{i:<5} {desc:<32} {sent:>9}B {recv:>9}B {ttfr_str:>8}"
+                )
                 total_recv += recv
 
             print("-" * 70)
@@ -227,10 +250,11 @@ async def test_multiturn_voice():
 
     except ConnectionRefusedError:
         print("\nERROR: Could not connect to server")
-        print("Make sure the server is running: uv run python server.py")
+        print("Make sure the server is running: uv run python -m inbound.server")
     except Exception as e:
         print(f"\nERROR: {e}")
         import traceback
+
         traceback.print_exc()
 
 

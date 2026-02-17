@@ -23,7 +23,10 @@ import base64
 import json
 import math
 import os
+import signal
 import struct
+import subprocess
+import sys
 import time
 import uuid
 
@@ -35,8 +38,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-# Import audio functions from agent module (replaces deprecated audioop)
-from agent import ulaw_to_pcm, pcm_to_ulaw
+from utils import pcm_to_ulaw, ulaw_to_pcm
 
 load_dotenv()
 
@@ -47,10 +49,10 @@ PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
 PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
 PUBLIC_URL = os.getenv("PUBLIC_URL", "")
-SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
 
-LOCAL_WS_URL = f"ws://localhost:{SERVER_PORT}/ws"
-LOCAL_HTTP_URL = f"http://localhost:{SERVER_PORT}"
+TEST_PORT = 18001
+LOCAL_WS_URL = f"ws://localhost:{TEST_PORT}/ws"
+LOCAL_HTTP_URL = f"http://localhost:{TEST_PORT}"
 
 
 # =============================================================================
@@ -63,10 +65,10 @@ class TestUnitAudioConversion:
 
     def test_ulaw_to_pcm_conversion(self):
         """Test μ-law to PCM conversion."""
-        ulaw_silence = b'\xff' * 160
+        ulaw_silence = b"\xff" * 160
         pcm_audio = ulaw_to_pcm(ulaw_silence)
 
-        samples = struct.unpack(f'{len(pcm_audio)//2}h', pcm_audio)
+        samples = struct.unpack(f"{len(pcm_audio) // 2}h", pcm_audio)
         avg_amplitude = sum(abs(s) for s in samples) / len(samples)
 
         assert len(pcm_audio) == 320  # 160 samples * 2 bytes
@@ -74,7 +76,7 @@ class TestUnitAudioConversion:
 
     def test_pcm_to_ulaw_conversion(self):
         """Test PCM to μ-law conversion."""
-        pcm_silence = b'\x00' * 320
+        pcm_silence = b"\x00" * 320
         ulaw_audio = pcm_to_ulaw(pcm_silence)
 
         assert len(ulaw_audio) == 160  # Half the size
@@ -85,16 +87,18 @@ class TestUnitAudioConversion:
         for i in range(160):
             sample = int(16000 * math.sin(2 * math.pi * 440 * i / 8000))
             samples.append(sample)
-        pcm_original = struct.pack(f'{len(samples)}h', *samples)
+        pcm_original = struct.pack(f"{len(samples)}h", *samples)
 
         ulaw = pcm_to_ulaw(pcm_original)
         pcm_restored = ulaw_to_pcm(ulaw)
 
-        original_samples = struct.unpack(f'{len(pcm_original)//2}h', pcm_original)
-        restored_samples = struct.unpack(f'{len(pcm_restored)//2}h', pcm_restored)
+        original_samples = struct.unpack(f"{len(pcm_original) // 2}h", pcm_original)
+        restored_samples = struct.unpack(f"{len(pcm_restored) // 2}h", pcm_restored)
 
         # Check correlation (should be > 0.9)
-        correlation = sum(o * r for o, r in zip(original_samples, restored_samples))
+        correlation = sum(
+            o * r for o, r in zip(original_samples, restored_samples, strict=True)
+        )
         orig_energy = sum(o * o for o in original_samples)
         rest_energy = sum(r * r for r in restored_samples)
 
@@ -145,17 +149,45 @@ class TestUnitPhoneNormalization:
 class TestLocalIntegration:
     """Integration tests using local WebSocket connection."""
 
-    @pytest.fixture
-    def server_running(self):
-        """Check if the local server is running."""
-        try:
-            response = httpx.get(LOCAL_HTTP_URL, timeout=2.0)
-            return response.status_code == 200
-        except Exception:
-            pytest.skip("Local server not running. Start with: uv run python server.py")
+    @pytest.fixture(scope="class")
+    def server_process(self):
+        """Start the inbound server as a subprocess."""
+        env = os.environ.copy()
+        env["SERVER_PORT"] = str(TEST_PORT)
+
+        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "inbound.server"],
+            cwd=project_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+
+        ready = False
+        for _ in range(30):
+            try:
+                resp = httpx.get(LOCAL_HTTP_URL, timeout=1.0)
+                if resp.status_code == 200:
+                    ready = True
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+        if not ready:
+            proc.terminate()
+            proc.wait()
+            output = proc.stdout.read().decode() if proc.stdout else ""
+            pytest.skip(f"Server did not start in time. Output:\n{output[:2000]}")
+
+        yield proc
+
+        os.kill(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=5)
 
     @pytest.mark.asyncio
-    async def test_local_health_check(self, server_running):
+    async def test_local_health_check(self, server_process):
         """Test the health check endpoint."""
         async with httpx.AsyncClient() as client:
             response = await client.get(LOCAL_HTTP_URL)
@@ -164,12 +196,16 @@ class TestLocalIntegration:
             assert data["status"] == "ok"
 
     @pytest.mark.asyncio
-    async def test_local_answer_webhook(self, server_running):
+    async def test_local_answer_webhook(self, server_process):
         """Test the answer webhook returns valid XML."""
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{LOCAL_HTTP_URL}/answer",
-                params={"CallUUID": "test123", "From": "+15551234567", "To": "+16572338892"}
+                params={
+                    "CallUUID": "test123",
+                    "From": "+15551234567",
+                    "To": "+16572338892",
+                },
             )
             assert response.status_code == 200
             assert "application/xml" in response.headers["content-type"]
@@ -177,16 +213,23 @@ class TestLocalIntegration:
             assert "bidirectional" in response.text
 
     @pytest.mark.asyncio
-    async def test_local_websocket_connection(self, server_running):
+    async def test_local_websocket_connection(self, server_process):
         """Test WebSocket connection and audio reception."""
-        body_data = {"call_uuid": "test123", "from": "+15551234567", "to": "+16572338892"}
+        body_data = {
+            "call_uuid": "test123",
+            "from": "+15551234567",
+            "to": "+16572338892",
+        }
         body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
         ws_url = f"{LOCAL_WS_URL}?body={body_b64}"
 
         async with websockets.connect(ws_url, close_timeout=2) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())}
+                "start": {
+                    "callId": str(uuid.uuid4()),
+                    "streamId": str(uuid.uuid4()),
+                },
             }
             await ws.send(json.dumps(start_event))
 
@@ -205,9 +248,13 @@ class TestLocalIntegration:
             assert audio_received, "No audio received from server"
 
     @pytest.mark.asyncio
-    async def test_local_audio_quality(self, server_running):
+    async def test_local_audio_quality(self, server_process):
         """Test audio quality from the agent."""
-        body_data = {"call_uuid": "test123", "from": "+15551234567", "to": "+16572338892"}
+        body_data = {
+            "call_uuid": "test123",
+            "from": "+15551234567",
+            "to": "+16572338892",
+        }
         body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
         ws_url = f"{LOCAL_WS_URL}?body={body_b64}"
 
@@ -216,7 +263,10 @@ class TestLocalIntegration:
         async with websockets.connect(ws_url, close_timeout=2) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())}
+                "start": {
+                    "callId": str(uuid.uuid4()),
+                    "streamId": str(uuid.uuid4()),
+                },
             }
             await ws.send(json.dumps(start_event))
 
@@ -230,8 +280,10 @@ class TestLocalIntegration:
                         if payload:
                             audio_chunks.append(base64.b64decode(payload))
                 except asyncio.TimeoutError:
-                    silence = base64.b64encode(b'\xff' * 160).decode()
-                    await ws.send(json.dumps({"event": "media", "media": {"payload": silence}}))
+                    silence = base64.b64encode(b"\xff" * 160).decode()
+                    await ws.send(
+                        json.dumps({"event": "media", "media": {"payload": silence}})
+                    )
                 except websockets.exceptions.ConnectionClosed:
                     break
 
@@ -240,9 +292,9 @@ class TestLocalIntegration:
 
         assert len(audio_chunks) > 0, "No audio chunks received"
 
-        combined_audio = b''.join(audio_chunks)
+        combined_audio = b"".join(audio_chunks)
         pcm_audio = ulaw_to_pcm(combined_audio)
-        samples = struct.unpack(f'{len(pcm_audio)//2}h', pcm_audio)
+        samples = struct.unpack(f"{len(pcm_audio) // 2}h", pcm_audio)
 
         rms = (sum(s**2 for s in samples) / len(samples)) ** 0.5
         assert rms > 500, f"Audio RMS {rms} too low - may be silence"

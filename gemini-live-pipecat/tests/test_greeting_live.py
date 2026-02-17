@@ -4,8 +4,11 @@ Live test script to verify the voice agent greets the caller first.
 This simulates a Plivo WebSocket connection to test the greeting behavior.
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
+import contextlib
 import json
 import sys
 
@@ -110,17 +113,18 @@ async def test_greeting():
                 # Cancel the silence task
                 if silence_task:
                     silence_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await silence_task
-                    except asyncio.CancelledError:
-                        pass
 
             except websockets.exceptions.ConnectionClosed as e:
                 print(f"\nConnection closed: {e}")
 
             print("\n")
             if greeting_received:
-                print(f"SUCCESS: Agent sent audio response (greeting) - {audio_bytes_total} bytes total")
+                print(
+                    f"SUCCESS: Agent sent audio response (greeting) - "
+                    f"{audio_bytes_total} bytes total"
+                )
                 return True
             else:
                 print("WARNING: No audio response received within timeout")

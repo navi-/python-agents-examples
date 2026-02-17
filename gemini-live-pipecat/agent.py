@@ -127,7 +127,7 @@ async def run_agent(
             [LLMMessagesAppendFrame([{"role": "user", "content": "Hello!"}], run_llm=True)]
         )
 
-    asyncio.create_task(send_greeting())
+    _greeting_task = asyncio.create_task(send_greeting())  # noqa: RUF006
 
     logger.info("Running pipeline...")
 

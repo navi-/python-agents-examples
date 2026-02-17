@@ -24,19 +24,21 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from loguru import logger
 
-from utils import (
-    AUDIO_CHUNK_SIZE,
-    GEMINI_API_KEY,
-    GEMINI_MODEL,
-    GEMINI_VOICE,
-    PLIVO_CHUNK_SIZE,
-    gemini_to_plivo,
-    plivo_to_gemini,
-)
+from utils import gemini_to_plivo, plivo_to_gemini
+
+load_dotenv()
+
+# Agent constants — API keys, model config, chunk sizes
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Kore")
+PLIVO_CHUNK_SIZE = 160  # 20ms at 8kHz μ-law (one Plivo packet)
+AUDIO_CHUNK_SIZE = 1024  # Bytes per chunk sent to Gemini
 
 if TYPE_CHECKING:
     from fastapi import WebSocket

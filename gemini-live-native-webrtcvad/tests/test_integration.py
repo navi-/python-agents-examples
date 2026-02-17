@@ -35,8 +35,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-# Import audio functions from agent module (replaces deprecated audioop)
-from agent import ulaw_to_pcm, pcm_to_ulaw
+from utils import normalize_phone_number, pcm_to_ulaw, ulaw_to_pcm
 
 load_dotenv()
 
@@ -62,18 +61,18 @@ class TestUnitAudioConversion:
     """Unit tests for audio format conversion."""
 
     def test_ulaw_to_pcm_conversion(self):
-        """Test μ-law to PCM conversion."""
+        """Test mu-law to PCM conversion."""
         ulaw_silence = b'\xff' * 160
         pcm_audio = ulaw_to_pcm(ulaw_silence)
 
-        samples = struct.unpack(f'{len(pcm_audio)//2}h', pcm_audio)
+        samples = struct.unpack(f'{len(pcm_audio) // 2}h', pcm_audio)
         avg_amplitude = sum(abs(s) for s in samples) / len(samples)
 
         assert len(pcm_audio) == 320  # 160 samples * 2 bytes
         assert avg_amplitude < 100  # Should be near silence
 
     def test_pcm_to_ulaw_conversion(self):
-        """Test PCM to μ-law conversion."""
+        """Test PCM to mu-law conversion."""
         pcm_silence = b'\x00' * 320
         ulaw_audio = pcm_to_ulaw(pcm_silence)
 
@@ -90,11 +89,13 @@ class TestUnitAudioConversion:
         ulaw = pcm_to_ulaw(pcm_original)
         pcm_restored = ulaw_to_pcm(ulaw)
 
-        original_samples = struct.unpack(f'{len(pcm_original)//2}h', pcm_original)
-        restored_samples = struct.unpack(f'{len(pcm_restored)//2}h', pcm_restored)
+        original_samples = struct.unpack(f'{len(pcm_original) // 2}h', pcm_original)
+        restored_samples = struct.unpack(f'{len(pcm_restored) // 2}h', pcm_restored)
 
         # Check correlation (should be > 0.9)
-        correlation = sum(o * r for o, r in zip(original_samples, restored_samples))
+        correlation = sum(
+            o * r for o, r in zip(original_samples, restored_samples, strict=True)
+        )
         orig_energy = sum(o * o for o in original_samples)
         rest_energy = sum(r * r for r in restored_samples)
 
@@ -108,33 +109,18 @@ class TestUnitPhoneNormalization:
 
     def test_normalize_e164_format(self):
         """Test normalizing E.164 formatted numbers."""
-        import phonenumbers
-
-        phone = "+16572338892"
-        parsed = phonenumbers.parse(phone, "US")
-        e164 = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-
-        assert e164 == "+16572338892"
+        result = normalize_phone_number("+16572338892")
+        assert result == "16572338892"
 
     def test_normalize_with_spaces(self):
         """Test normalizing numbers with spaces."""
-        import phonenumbers
-
-        phone = "+1 657-233-8892"
-        parsed = phonenumbers.parse(phone, "US")
-        e164 = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-
-        assert e164 == "+16572338892"
+        result = normalize_phone_number("+1 657-233-8892")
+        assert result == "16572338892"
 
     def test_normalize_local_format(self):
         """Test normalizing local format numbers."""
-        import phonenumbers
-
-        phone = "(657) 233-8892"
-        parsed = phonenumbers.parse(phone, "US")
-        e164 = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-
-        assert e164 == "+16572338892"
+        result = normalize_phone_number("(657) 233-8892")
+        assert result == "16572338892"
 
 
 # =============================================================================
@@ -152,7 +138,10 @@ class TestLocalIntegration:
             response = httpx.get(LOCAL_HTTP_URL, timeout=2.0)
             return response.status_code == 200
         except Exception:
-            pytest.skip("Local server not running. Start with: uv run python server.py")
+            pytest.skip(
+                "Local server not running. "
+                "Start with: uv run python -m inbound.server"
+            )
 
     @pytest.mark.asyncio
     async def test_local_health_check(self, server_running):
@@ -169,7 +158,11 @@ class TestLocalIntegration:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{LOCAL_HTTP_URL}/answer",
-                params={"CallUUID": "test123", "From": "+15551234567", "To": "+16572338892"}
+                params={
+                    "CallUUID": "test123",
+                    "From": "+15551234567",
+                    "To": "+16572338892",
+                },
             )
             assert response.status_code == 200
             assert "application/xml" in response.headers["content-type"]
@@ -179,14 +172,21 @@ class TestLocalIntegration:
     @pytest.mark.asyncio
     async def test_local_websocket_connection(self, server_running):
         """Test WebSocket connection and audio reception."""
-        body_data = {"call_uuid": "test123", "from": "+15551234567", "to": "+16572338892"}
+        body_data = {
+            "call_uuid": "test123",
+            "from": "+15551234567",
+            "to": "+16572338892",
+        }
         body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
         ws_url = f"{LOCAL_WS_URL}?body={body_b64}"
 
         async with websockets.connect(ws_url, close_timeout=2) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())}
+                "start": {
+                    "callId": str(uuid.uuid4()),
+                    "streamId": str(uuid.uuid4()),
+                },
             }
             await ws.send(json.dumps(start_event))
 
@@ -207,7 +207,11 @@ class TestLocalIntegration:
     @pytest.mark.asyncio
     async def test_local_audio_quality(self, server_running):
         """Test audio quality from the agent."""
-        body_data = {"call_uuid": "test123", "from": "+15551234567", "to": "+16572338892"}
+        body_data = {
+            "call_uuid": "test123",
+            "from": "+15551234567",
+            "to": "+16572338892",
+        }
         body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
         ws_url = f"{LOCAL_WS_URL}?body={body_b64}"
 
@@ -216,7 +220,10 @@ class TestLocalIntegration:
         async with websockets.connect(ws_url, close_timeout=2) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())}
+                "start": {
+                    "callId": str(uuid.uuid4()),
+                    "streamId": str(uuid.uuid4()),
+                },
             }
             await ws.send(json.dumps(start_event))
 
@@ -231,7 +238,11 @@ class TestLocalIntegration:
                             audio_chunks.append(base64.b64decode(payload))
                 except asyncio.TimeoutError:
                     silence = base64.b64encode(b'\xff' * 160).decode()
-                    await ws.send(json.dumps({"event": "media", "media": {"payload": silence}}))
+                    await ws.send(
+                        json.dumps(
+                            {"event": "media", "media": {"payload": silence}}
+                        )
+                    )
                 except websockets.exceptions.ConnectionClosed:
                     break
 
@@ -242,7 +253,7 @@ class TestLocalIntegration:
 
         combined_audio = b''.join(audio_chunks)
         pcm_audio = ulaw_to_pcm(combined_audio)
-        samples = struct.unpack(f'{len(pcm_audio)//2}h', pcm_audio)
+        samples = struct.unpack(f'{len(pcm_audio) // 2}h', pcm_audio)
 
         rms = (sum(s**2 for s in samples) / len(samples)) ** 0.5
         assert rms > 500, f"Audio RMS {rms} too low - may be silence"
@@ -268,7 +279,9 @@ class TestGeminiIntegration:
         client = genai.Client(api_key=GEMINI_API_KEY)
         config = types.LiveConnectConfig(response_modalities=["AUDIO"])
 
-        async with client.aio.live.connect(model=GEMINI_MODEL, config=config) as session:
+        async with client.aio.live.connect(
+            model=GEMINI_MODEL, config=config
+        ) as session:
             assert session is not None
 
     @pytest.mark.asyncio
@@ -280,16 +293,22 @@ class TestGeminiIntegration:
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Kore")
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name="Kore"
+                    )
                 )
             ),
         )
 
         audio_chunks = []
 
-        async with client.aio.live.connect(model=GEMINI_MODEL, config=config) as session:
+        async with client.aio.live.connect(
+            model=GEMINI_MODEL, config=config
+        ) as session:
             await session.send_client_content(
-                turns=types.Content(role="user", parts=[types.Part(text="Say hello")]),
+                turns=types.Content(
+                    role="user", parts=[types.Part(text="Say hello")]
+                ),
                 turn_complete=True,
             )
 
@@ -300,8 +319,13 @@ class TestGeminiIntegration:
                             model_turn = response.server_content.model_turn
                             if model_turn and model_turn.parts:
                                 for part in model_turn.parts:
-                                    if part.inline_data and part.inline_data.data:
-                                        audio_chunks.append(part.inline_data.data)
+                                    if (
+                                        part.inline_data
+                                        and part.inline_data.data
+                                    ):
+                                        audio_chunks.append(
+                                            part.inline_data.data
+                                        )
                             if response.server_content.turn_complete:
                                 break
             except asyncio.TimeoutError:
@@ -328,19 +352,19 @@ class TestPlivoIntegration:
 
     def test_plivo_credentials_valid(self, plivo_configured):
         """Test that Plivo credentials are valid."""
-        client = plivo.RestClient(auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN)
+        client = plivo.RestClient(
+            auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN
+        )
         account = client.account.get()
         assert account is not None
 
     def test_plivo_phone_number_exists(self, plivo_configured):
         """Test that the configured phone number exists."""
-        import phonenumbers
+        client = plivo.RestClient(
+            auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN
+        )
 
-        client = plivo.RestClient(auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN)
-
-        parsed = phonenumbers.parse(PLIVO_PHONE_NUMBER, "US")
-        e164 = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-        number_digits = e164.lstrip("+")
+        number_digits = normalize_phone_number(PLIVO_PHONE_NUMBER)
 
         try:
             number = client.numbers.get(number=number_digits)

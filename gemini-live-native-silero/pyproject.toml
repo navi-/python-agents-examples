@@ -16,6 +16,7 @@ dependencies = [
     "scipy>=1.11.0",
     "phonenumbers>=8.13.0",
     "onnxruntime>=1.14.0",
+    "silero-vad>=5.1",
 ]
 
 [dependency-groups]

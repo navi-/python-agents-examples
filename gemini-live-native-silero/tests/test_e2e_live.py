@@ -17,7 +17,7 @@ Requirements:
     - Port 18001 available (used by test server)
 
 Usage:
-    cd gemini-live-native
+    cd gemini-live-native-silero
     uv run pytest tests/test_e2e_live.py -v -s
 """
 
@@ -42,8 +42,7 @@ import pytest
 import websockets
 from dotenv import load_dotenv
 
-# Add parent to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils import ulaw_to_pcm
 
 load_dotenv()
 
@@ -67,8 +66,6 @@ pytestmark = pytest.mark.skipif(
 # =============================================================================
 # Helpers
 # =============================================================================
-
-from agent import ulaw_to_pcm
 
 
 def pcm16_to_wav(pcm_data: bytes, sample_rate: int = 8000) -> bytes:
@@ -104,7 +101,7 @@ async def collect_audio_from_ws(
     timeout: float = 20.0,
     min_bytes: int = 3000,
 ) -> bytes:
-    """Receive playAudio events from agent, return concatenated μ-law bytes."""
+    """Receive playAudio events from agent, return concatenated mu-law bytes."""
     audio_chunks = []
     total_bytes = 0
     start = time.time()
@@ -136,7 +133,7 @@ async def collect_audio_from_ws(
 
 
 def compute_audio_rms(ulaw_audio: bytes) -> float:
-    """Compute RMS of μ-law audio."""
+    """Compute RMS of mu-law audio."""
     pcm = ulaw_to_pcm(ulaw_audio)
     samples = struct.unpack(f"{len(pcm) // 2}h", pcm)
     return (sum(s**2 for s in samples) / max(len(samples), 1)) ** 0.5
@@ -155,7 +152,7 @@ def server_process():
 
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     proc = subprocess.Popen(
-        [sys.executable, "server.py"],
+        [sys.executable, "-m", "inbound.server"],
         cwd=project_dir,
         env=env,
         stdout=subprocess.PIPE,
@@ -196,14 +193,21 @@ class TestE2ELive:
     @pytest.mark.asyncio
     async def test_agent_greeting(self, server_process):
         """Agent should send an audio greeting when the call connects."""
-        body_data = {"call_uuid": "test-e2e", "from": "+15551234567", "to": "+16572338892"}
+        body_data = {
+            "call_uuid": "test-e2e",
+            "from": "+15551234567",
+            "to": "+16572338892",
+        }
         body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
         ws_url = f"{TEST_WS_URL}?body={body_b64}"
 
         async with websockets.connect(ws_url, close_timeout=3) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())},
+                "start": {
+                    "callId": str(uuid.uuid4()),
+                    "streamId": str(uuid.uuid4()),
+                },
             }
             await ws.send(json.dumps(start_event))
             ulaw_audio = await collect_audio_from_ws(ws, timeout=20, min_bytes=2000)
@@ -221,22 +225,31 @@ class TestE2ELive:
         print(f"[Greeting transcript]: {transcript}")
 
         assert len(transcript) > 5, "Greeting transcript is too short"
-        greeting_words = ["hello", "hi", "welcome", "help", "how", "assist", "alex", "techflow"]
-        assert any(
-            w in transcript.lower() for w in greeting_words
-        ), f"Greeting doesn't match expected content: {transcript}"
+        greeting_words = [
+            "hello", "hi", "welcome", "help", "how", "assist", "alex", "techflow",
+        ]
+        assert any(w in transcript.lower() for w in greeting_words), (
+            f"Greeting doesn't match expected content: {transcript}"
+        )
 
     @pytest.mark.asyncio
     async def test_agent_responds_to_text(self, server_process):
         """Agent should respond when sent a text message about products."""
-        body_data = {"call_uuid": "test-e2e-2", "from": "+15551234567", "to": "+16572338892"}
+        body_data = {
+            "call_uuid": "test-e2e-2",
+            "from": "+15551234567",
+            "to": "+16572338892",
+        }
         body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
         ws_url = f"{TEST_WS_URL}?body={body_b64}"
 
         async with websockets.connect(ws_url, close_timeout=3) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())},
+                "start": {
+                    "callId": str(uuid.uuid4()),
+                    "streamId": str(uuid.uuid4()),
+                },
             }
             await ws.send(json.dumps(start_event))
 
@@ -245,14 +258,22 @@ class TestE2ELive:
             print(f"\n[Greeting] {len(greeting)} bytes received")
 
             # Inject a text question (native agent supports 'text' events)
-            await ws.send(json.dumps({
-                "event": "text",
-                "text": "What plans do you offer and how much do they cost?",
-            }))
+            await ws.send(
+                json.dumps(
+                    {
+                        "event": "text",
+                        "text": "What plans do you offer and how much do they cost?",
+                    }
+                )
+            )
 
-            response_audio = await collect_audio_from_ws(ws, timeout=25, min_bytes=3000)
+            response_audio = await collect_audio_from_ws(
+                ws, timeout=25, min_bytes=3000
+            )
 
-        assert len(response_audio) > 3000, f"Response too short: {len(response_audio)} bytes"
+        assert len(response_audio) > 3000, (
+            f"Response too short: {len(response_audio)} bytes"
+        )
 
         rms = compute_audio_rms(response_audio)
         print(f"[Response] Audio: {len(response_audio)} bytes, RMS: {rms:.1f}")
@@ -278,14 +299,21 @@ class TestE2ELive:
     @pytest.mark.asyncio
     async def test_audio_is_not_silence(self, server_process):
         """Verify the received audio has actual speech content (not silence)."""
-        body_data = {"call_uuid": "test-e2e-3", "from": "+15551234567", "to": "+16572338892"}
+        body_data = {
+            "call_uuid": "test-e2e-3",
+            "from": "+15551234567",
+            "to": "+16572338892",
+        }
         body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
         ws_url = f"{TEST_WS_URL}?body={body_b64}"
 
         async with websockets.connect(ws_url, close_timeout=3) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())},
+                "start": {
+                    "callId": str(uuid.uuid4()),
+                    "streamId": str(uuid.uuid4()),
+                },
             }
             await ws.send(json.dumps(start_event))
             ulaw_audio = await collect_audio_from_ws(ws, timeout=20, min_bytes=2000)
@@ -297,7 +325,10 @@ class TestE2ELive:
         rms = (sum(s**2 for s in samples) / len(samples)) ** 0.5
         duration_s = len(samples) / 8000
 
-        print(f"\n[Audio quality] RMS: {rms:.1f}, duration: {duration_s:.2f}s, samples: {len(samples)}")
+        print(
+            f"\n[Audio quality] RMS: {rms:.1f}, duration: {duration_s:.2f}s, "
+            f"samples: {len(samples)}"
+        )
         assert rms > 500, f"Audio RMS {rms:.1f} too low — likely silence"
         assert duration_s > 0.5, f"Audio too short: {duration_s:.2f}s"
 

@@ -213,7 +213,28 @@ echo ""
 
 echo "--- VAD ---"
 
-if [[ "$ORCHESTRATION" == "native" ]]; then
+if [[ "$EXAMPLE" == *"-no-vad"* ]]; then
+    skip "SileroVADProcessor (no-vad variant — uses server-side VAD)"
+    skip "plivo_to_vad (no-vad variant)"
+    skip "VAD-driven turn management (no-vad variant)"
+    skip "Barge-in handling (no-vad variant)"
+    skip "silero-vad dependency (no-vad variant)"
+elif [[ "$EXAMPLE" == *"-webrtcvad"* ]]; then
+    skip "SileroVADProcessor (webrtcvad variant — uses WebRTC VAD)"
+    skip "plivo_to_vad (webrtcvad variant)"
+    # webrtcvad still needs speech detection and barge-in
+    if grep -rq "speech_ended\|is_speech" "$EXAMPLE_DIR/inbound/agent.py" 2>/dev/null; then
+        pass "VAD-driven turn management"
+    else
+        fail "VAD-driven turn management not found in inbound/agent.py"
+    fi
+    if grep -rq "speech_started\|barge.in\|interrupt" "$EXAMPLE_DIR/inbound/agent.py" 2>/dev/null; then
+        pass "Barge-in handling"
+    else
+        fail "Barge-in handling not found in inbound/agent.py"
+    fi
+    skip "silero-vad dependency (webrtcvad variant)"
+elif [[ "$ORCHESTRATION" == "native" ]]; then
     # SileroVADProcessor used
     if grep -rq "SileroVADProcessor" "$EXAMPLE_DIR/inbound/agent.py" 2>/dev/null; then
         pass "SileroVADProcessor imported in inbound/agent.py"
@@ -365,7 +386,7 @@ echo "--- Unit Tests ---"
 
 if command -v uv &>/dev/null && [[ -f "$EXAMPLE_DIR/tests/test_integration.py" ]]; then
     cd "$EXAMPLE_DIR"
-    if uv run pytest tests/test_integration.py -v -k "unit" --tb=short 2>/dev/null; then
+    if uv run python -m pytest tests/test_integration.py -v -k "unit" --tb=short 2>/dev/null; then
         pass "Unit tests pass"
     else
         fail "Unit tests failed"

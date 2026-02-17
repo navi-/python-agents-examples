@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import io
 import json
 import os
@@ -209,10 +210,8 @@ async def collect_audio_from_ws(
                 break
     finally:
         silence_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await silence_task
-        except asyncio.CancelledError:
-            pass
 
     return b"".join(audio_chunks)
 
@@ -230,7 +229,7 @@ def server_process():
 
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     proc = subprocess.Popen(
-        [sys.executable, "server.py"],
+        [sys.executable, "-m", "inbound.server"],
         cwd=project_dir,
         env=env,
         stdout=subprocess.PIPE,
@@ -338,7 +337,10 @@ class TestE2ELive:
         rms = (sum(s**2 for s in samples) / len(samples)) ** 0.5
         duration_s = len(samples) / 8000
 
-        print(f"\n[Audio quality] RMS: {rms:.1f}, duration: {duration_s:.2f}s, samples: {len(samples)}")
+        print(
+            f"\n[Audio quality] RMS: {rms:.1f}, duration: {duration_s:.2f}s, "
+            f"samples: {len(samples)}"
+        )
         assert rms > 300, f"Audio RMS {rms:.1f} too low — likely silence"
         assert duration_s > 0.3, f"Audio too short: {duration_s:.2f}s"
 
