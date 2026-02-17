@@ -1,22 +1,7 @@
-"""
-Voice agent using Google Gemini Live API for speech-to-speech conversations.
+"""Inbound voice agent — GeminiVoiceBot engine for incoming calls.
 
-This module provides a production-ready voice agent that:
-- Connects to Google's Gemini Live API for real-time speech processing
-- Handles bidirectional audio streaming with Plivo telephony
-- Supports function calling for actions during conversations
-- Manages audio format conversion between Plivo (μ-law 8kHz) and Gemini (PCM 16kHz/24kHz)
-
-Usage:
-    from agent import run_agent
-
-    # In your WebSocket handler:
-    await run_agent(websocket, call_id, from_number, to_number)
-
-Configuration (via environment variables):
-    GEMINI_API_KEY: Google AI API key (required)
-    GEMINI_MODEL: Model name (default: gemini-2.5-flash-native-audio-preview-12-2025)
-    GEMINI_VOICE: Voice name (default: Kore)
+Loads the inbound system prompt and provides run_agent() for handling
+inbound call WebSocket sessions.
 """
 
 from __future__ import annotations
@@ -28,221 +13,35 @@ import json
 import os
 import random
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
-from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from loguru import logger
-from scipy import signal as scipy_signal
+
+from utils import (
+    AUDIO_CHUNK_SIZE,
+    GEMINI_API_KEY,
+    GEMINI_MODEL,
+    GEMINI_VOICE,
+    PLIVO_CHUNK_SIZE,
+    gemini_to_plivo,
+    plivo_to_gemini,
+)
 
 if TYPE_CHECKING:
     from fastapi import WebSocket
-
-load_dotenv()
-
-# =============================================================================
-# Configuration
-# =============================================================================
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
-GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Kore")
-
-# Audio format constants
-PLIVO_SAMPLE_RATE = 8000  # Plivo uses 8kHz μ-law
-GEMINI_INPUT_RATE = 16000  # Gemini expects 16kHz PCM input
-GEMINI_OUTPUT_RATE = 24000  # Gemini outputs 24kHz PCM
-AUDIO_CHUNK_SIZE = 1024  # Bytes per chunk sent to Gemini
 
 # =============================================================================
 # System Prompt
 # =============================================================================
 
-DEFAULT_SYSTEM_PROMPT = """
-You are Alex, a friendly and professional customer service agent for TechFlow,
-a software company that provides cloud-based productivity tools.
-
-## Your Personality
-- Warm, patient, and empathetic
-- Professional but conversational - you're talking to a real person
-- You use natural speech patterns with occasional filler words
-- You never sound robotic or overly formal
-
-## Audio Output Rules
-- Your responses will be converted to speech, so never use special characters
-- Spell out numbers naturally: say "twenty three dollars" not "$23"
-- Keep responses concise - aim for 1-3 sentences unless explaining something complex
-- Use natural pauses by breaking up longer responses
-
-## Your Capabilities
-You can help customers with:
-1. Checking order status - ask for their order number or email
-2. Product information about TechFlow Pro, Teams, and Enterprise plans
-3. Billing questions and payment issues
-4. Technical support for basic issues
-5. Scheduling callbacks for complex issues
-6. Sending confirmation texts to their phone
-
-## Product Knowledge
-- TechFlow Pro: twelve dollars per month, for individuals, 100GB storage
-- TechFlow Teams: twenty five dollars per user per month, up to 25 people, 500GB
-- TechFlow Enterprise: Custom pricing, unlimited users and storage, dedicated support
-
-## When to Use Your Tools
-- check_order_status: when customer asks about an order, delivery, or purchase
-- send_sms: when customer needs information texted to them
-- schedule_callback: for complex issues or when customer wants a specialist
-- transfer_call: when customer asks for a human or you cannot help
-- end_call: when conversation is complete and customer says goodbye
-
-## Conversation Flow
-1. Greet the caller warmly and ask how you can help
-2. Listen and acknowledge their concern before jumping to solutions
-3. Ask clarifying questions if needed
-4. Provide clear, helpful responses
-5. Confirm the customer is satisfied before ending
-6. End with a friendly closing
-
-## Handling Difficult Situations
-- If frustrated, acknowledge their feelings first
-- Never argue or get defensive
-- Be honest if you cannot help and offer alternatives
-- If unsure, say so honestly rather than guessing
-
-## Important Guidelines
-- Never make up order information - always use check_order_status
-- Ask for phone number before sending SMS if not available
-- Keep the conversation moving naturally
-- Ask if there is anything else before ending
-""".strip()
-
-SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
+SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.md").read_text().strip()
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", SYSTEM_PROMPT)
 
 # =============================================================================
-# Audio Conversion Utilities (public API for use in tests)
-# =============================================================================
-
-# μ-law decoding table (ITU-T G.711)
-_ULAW_DECODE_TABLE = np.array([
-    -32124, -31100, -30076, -29052, -28028, -27004, -25980, -24956,
-    -23932, -22908, -21884, -20860, -19836, -18812, -17788, -16764,
-    -15996, -15484, -14972, -14460, -13948, -13436, -12924, -12412,
-    -11900, -11388, -10876, -10364, -9852, -9340, -8828, -8316,
-    -7932, -7676, -7420, -7164, -6908, -6652, -6396, -6140,
-    -5884, -5628, -5372, -5116, -4860, -4604, -4348, -4092,
-    -3900, -3772, -3644, -3516, -3388, -3260, -3132, -3004,
-    -2876, -2748, -2620, -2492, -2364, -2236, -2108, -1980,
-    -1884, -1820, -1756, -1692, -1628, -1564, -1500, -1436,
-    -1372, -1308, -1244, -1180, -1116, -1052, -988, -924,
-    -876, -844, -812, -780, -748, -716, -684, -652,
-    -620, -588, -556, -524, -492, -460, -428, -396,
-    -372, -356, -340, -324, -308, -292, -276, -260,
-    -244, -228, -212, -196, -180, -164, -148, -132,
-    -120, -112, -104, -96, -88, -80, -72, -64,
-    -56, -48, -40, -32, -24, -16, -8, 0,
-    32124, 31100, 30076, 29052, 28028, 27004, 25980, 24956,
-    23932, 22908, 21884, 20860, 19836, 18812, 17788, 16764,
-    15996, 15484, 14972, 14460, 13948, 13436, 12924, 12412,
-    11900, 11388, 10876, 10364, 9852, 9340, 8828, 8316,
-    7932, 7676, 7420, 7164, 6908, 6652, 6396, 6140,
-    5884, 5628, 5372, 5116, 4860, 4604, 4348, 4092,
-    3900, 3772, 3644, 3516, 3388, 3260, 3132, 3004,
-    2876, 2748, 2620, 2492, 2364, 2236, 2108, 1980,
-    1884, 1820, 1756, 1692, 1628, 1564, 1500, 1436,
-    1372, 1308, 1244, 1180, 1116, 1052, 988, 924,
-    876, 844, 812, 780, 748, 716, 684, 652,
-    620, 588, 556, 524, 492, 460, 428, 396,
-    372, 356, 340, 324, 308, 292, 276, 260,
-    244, 228, 212, 196, 180, 164, 148, 132,
-    120, 112, 104, 96, 88, 80, 72, 64,
-    56, 48, 40, 32, 24, 16, 8, 0,
-], dtype=np.int16)
-
-
-def ulaw_to_pcm(ulaw_data: bytes) -> bytes:
-    """Convert μ-law encoded audio to 16-bit PCM.
-
-    μ-law is a companding algorithm used in telephony (G.711 standard).
-    This replaces the deprecated audioop.ulaw2lin function.
-
-    Args:
-        ulaw_data: μ-law encoded audio bytes
-
-    Returns:
-        16-bit PCM audio bytes
-    """
-    ulaw_samples = np.frombuffer(ulaw_data, dtype=np.uint8)
-    pcm_samples = _ULAW_DECODE_TABLE[ulaw_samples]
-    return pcm_samples.tobytes()
-
-
-def pcm_to_ulaw(pcm_data: bytes) -> bytes:
-    """Convert 16-bit PCM audio to μ-law encoding.
-
-    This replaces the deprecated audioop.lin2ulaw function.
-
-    Args:
-        pcm_data: 16-bit PCM audio bytes
-
-    Returns:
-        μ-law encoded audio bytes
-    """
-    BIAS = 0x84
-    CLIP = 32635
-
-    pcm_samples = np.frombuffer(pcm_data, dtype=np.int16).astype(np.int32)
-    sign = (pcm_samples >> 8) & 0x80
-    pcm_samples = np.where(sign != 0, -pcm_samples, pcm_samples)
-    pcm_samples = np.clip(pcm_samples, 0, CLIP) + BIAS
-
-    # Find segment using vectorized log2
-    segment = np.floor(np.log2(pcm_samples >> 7)).astype(np.int32)
-    segment = np.clip(segment, 0, 7)
-
-    # Build μ-law byte
-    ulaw = sign | ((segment << 4) | ((pcm_samples >> (segment + 3)) & 0x0F))
-    ulaw = ~ulaw & 0xFF
-
-    return ulaw.astype(np.uint8).tobytes()
-
-
-def resample_audio(audio_data: bytes, input_rate: int, output_rate: int) -> bytes:
-    """Resample audio from one sample rate to another.
-
-    Args:
-        audio_data: Raw PCM audio bytes (16-bit signed integers)
-        input_rate: Source sample rate in Hz
-        output_rate: Target sample rate in Hz
-
-    Returns:
-        Resampled audio as bytes
-    """
-    if input_rate == output_rate:
-        return audio_data
-
-    samples = np.frombuffer(audio_data, dtype=np.int16)
-    ratio = output_rate / input_rate
-    new_length = int(len(samples) * ratio)
-    resampled = scipy_signal.resample(samples.astype(np.float64), new_length)
-    return np.clip(resampled, -32768, 32767).astype(np.int16).tobytes()
-
-
-def plivo_to_gemini(mulaw_8k: bytes) -> bytes:
-    """Convert Plivo audio (μ-law 8kHz) to Gemini format (PCM16 16kHz)."""
-    pcm_8k = ulaw_to_pcm(mulaw_8k)
-    return resample_audio(pcm_8k, PLIVO_SAMPLE_RATE, GEMINI_INPUT_RATE)
-
-
-def gemini_to_plivo(pcm_24k: bytes) -> bytes:
-    """Convert Gemini audio (PCM16 24kHz) to Plivo format (μ-law 8kHz)."""
-    pcm_8k = resample_audio(pcm_24k, GEMINI_OUTPUT_RATE, PLIVO_SAMPLE_RATE)
-    return pcm_to_ulaw(pcm_8k)
-
-
-# =============================================================================
-# Tool Functions (simple functions instead of abstract class)
+# Tool Functions — replace these with your actual implementations
 # =============================================================================
 
 
@@ -253,7 +52,6 @@ async def check_order_status(order_number: str | None, email: str | None) -> dic
     if not order_number and not email:
         return {"status": "error", "message": "Need order number or email"}
 
-    # Mock implementation - replace with actual order system integration
     statuses = [
         {
             "status": "shipped",
@@ -287,7 +85,6 @@ async def send_sms(phone_number: str, message: str) -> dict[str, Any]:
     if not phone_number:
         return {"status": "error", "message": "Phone number required"}
 
-    # Mock implementation - replace with actual SMS integration (e.g., Plivo SMS)
     return {
         "status": "sent",
         "phone_number": phone_number,
@@ -305,7 +102,6 @@ async def schedule_callback(
     if not phone_number:
         return {"status": "error", "message": "Phone number required"}
 
-    # Mock implementation - replace with actual scheduling system
     return {
         "status": "scheduled",
         "callback_id": f"CB{random.randint(100000, 999999)}",
@@ -320,7 +116,6 @@ async def transfer_call(department: str, reason: str) -> dict[str, Any]:
     """Transfer call to human agent. Replace with your actual implementation."""
     logger.info(f"Transferring to {department}: {reason}")
 
-    # Mock implementation - replace with actual call transfer logic
     return {
         "status": "transferring",
         "department": department,
@@ -530,15 +325,11 @@ You can use the caller's phone number for SMS or callbacks without asking."""
         try:
             config = self._build_session_config()
 
-            async with self._client.aio.live.connect(
-                model=GEMINI_MODEL, config=config
-            ) as session:
+            async with self._client.aio.live.connect(model=GEMINI_MODEL, config=config) as session:
                 logger.info("Connected to Gemini Live API")
 
                 await session.send_client_content(
-                    turns=types.Content(
-                        role="user", parts=[types.Part(text=self.initial_message)]
-                    ),
+                    turns=types.Content(role="user", parts=[types.Part(text=self.initial_message)]),
                     turn_complete=True,
                 )
 
@@ -559,7 +350,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
         ]
 
         try:
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 if task.exception():
                     logger.error(f"Task {task.get_name()} failed: {task.exception()}")
@@ -610,7 +401,12 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                 logger.error(f"Plivo receiver error: {e}")
 
     async def _receive_from_gemini(self, session) -> None:
-        """Receive audio from Gemini and queue for Plivo."""
+        """Receive audio from Gemini and queue for Plivo.
+
+        Uses a double-loop pattern: session.receive() yields responses until
+        turn_complete, then the iterator exits. The outer while loop restarts
+        it to listen for the next turn.
+        """
         try:
             while self._running:
                 try:
@@ -650,7 +446,6 @@ You can use the caller's phone number for SMS or callbacks without asking."""
 
     async def _send_to_plivo(self) -> None:
         """Send queued audio to Plivo WebSocket in 20ms chunks."""
-        PLIVO_CHUNK_SIZE = 160  # 20ms at 8kHz μ-law
         audio_buffer = bytearray()
 
         try:
@@ -693,16 +488,7 @@ async def run_agent(
     system_prompt: str | None = None,
     initial_message: str = "Hello, I'm calling for help.",
 ) -> None:
-    """Run a voice agent session for an incoming call.
-
-    Args:
-        websocket: FastAPI WebSocket connection from Plivo
-        call_id: Unique identifier for this call
-        from_number: Caller's phone number
-        to_number: Called phone number
-        system_prompt: Custom system prompt (default: DEFAULT_SYSTEM_PROMPT)
-        initial_message: Message to trigger agent greeting
-    """
+    """Run a voice agent session for an incoming call."""
     agent = GeminiVoiceBot(
         websocket=websocket,
         call_id=call_id,

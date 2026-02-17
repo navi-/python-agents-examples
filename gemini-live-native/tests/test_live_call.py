@@ -14,7 +14,7 @@ This test:
 
 Requirements:
     - Valid PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_PHONE_NUMBER, PLIVO_TEST_NUMBER,
-      XAI_API_KEY in .env
+      GEMINI_API_KEY in .env
     - PLIVO_TEST_NUMBER is a second Plivo number (used as caller ID for test calls)
     - ngrok binary available on PATH
     - faster-whisper installed (dev dependency)
@@ -22,7 +22,7 @@ Requirements:
     - Port 18002 available
 
 Usage:
-    cd grok-voice-native
+    cd gemini-live-native
     uv run pytest tests/test_live_call.py -v -s
 """
 
@@ -54,7 +54,7 @@ PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
 PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
 PLIVO_TEST_NUMBER = os.getenv("PLIVO_TEST_NUMBER", "")
-XAI_API_KEY = os.getenv("XAI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Ensure ffmpeg from project root is on PATH
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -65,8 +65,10 @@ TEST_PORT = 18002
 TEST_HTTP_URL = f"http://localhost:{TEST_PORT}"
 
 pytestmark = pytest.mark.skipif(
-    not all([PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_PHONE_NUMBER, PLIVO_TEST_NUMBER, XAI_API_KEY]),
-    reason="Plivo credentials, PLIVO_TEST_NUMBER, or XAI_API_KEY not configured",
+    not all(
+        [PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_PHONE_NUMBER, PLIVO_TEST_NUMBER, GEMINI_API_KEY]
+    ),
+    reason="Plivo credentials, PLIVO_TEST_NUMBER, or GEMINI_API_KEY not configured",
 )
 
 
@@ -130,7 +132,7 @@ def plivo_configured(ngrok_tunnel):
     client = plivo.RestClient(auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN)
     public_url = ngrok_tunnel
 
-    app_name = "Grok_Voice_Agent_Test"
+    app_name = "Gemini_Voice_Agent_Test"
     answer_url = f"{public_url}/answer"
     hangup_url = f"{public_url}/hangup"
 
@@ -287,8 +289,15 @@ class TestLiveCall:
 
         assert len(transcript) > 5, f"Transcript too short: '{transcript}'"
         greeting_words = [
-            "hello", "hi", "welcome", "help", "how",
-            "assist", "alex", "techflow", "grok",
+            "hello",
+            "hi",
+            "welcome",
+            "help",
+            "how",
+            "assist",
+            "alex",
+            "techflow",
+            "gemini",
         ]
         matches = [w for w in greeting_words if w in transcript.lower()]
         assert matches, (
@@ -314,8 +323,6 @@ class TestLiveCall:
             time.sleep(20)
 
             # Inject a question via Plivo TTS on the A-leg.
-            # The A-leg audio flows to the B-leg (where the agent's Stream is),
-            # so the agent's STT picks it up.
             question = "What plans do you offer and how much do they cost?"
             print(f"[Call] Speaking into call (aleg): '{question}'")
             client.calls.speak(call_uuid, text=question, language="en-US", legs="aleg")
@@ -360,10 +367,21 @@ class TestLiveCall:
 
         # Verify agent responded to the pricing question
         product_words = [
-            "pro", "team", "enterprise", "starter",
-            "twelve", "twenty", "dollar", "month",
-            "plan", "price", "cost", "tier",
-            "12", "25", "49",
+            "pro",
+            "team",
+            "enterprise",
+            "starter",
+            "twelve",
+            "twenty",
+            "dollar",
+            "month",
+            "plan",
+            "price",
+            "cost",
+            "tier",
+            "12",
+            "25",
+            "49",
         ]
         product_matches = [w for w in product_words if w in transcript_lower]
         assert len(product_matches) >= 2, (

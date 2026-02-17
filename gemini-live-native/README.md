@@ -1,13 +1,14 @@
 # Gemini Live Voice Agent
 
-Real-time voice agent using Google Gemini Live API for speech-to-speech conversations with Plivo telephony.
+Real-time voice agent using Google Gemini Live API for speech-to-speech conversations with Plivo telephony. Supports both inbound and outbound calls.
 
 ## Features
 
 - **Speech-to-Speech**: Native audio using Gemini Live API (no separate STT/TTS)
 - **Multi-turn Conversations**: Maintains context across conversation turns
 - **Function Calling**: Order status, SMS, callbacks, transfers, and call control
-- **Auto-Configuration**: Automatically configures Plivo webhooks on startup
+- **Inbound Calls**: Auto-configures Plivo webhooks for incoming calls
+- **Outbound Calls**: Campaign-based outbound calling with status tracking
 - **Low Latency**: Real-time bidirectional audio streaming
 
 ## Prerequisites
@@ -53,29 +54,50 @@ Copy the ngrok URL to `PUBLIC_URL` in your `.env` file.
 
 ### 4. Run the server
 
+**Inbound mode** (receive calls):
+
 ```bash
-uv run python server.py
+uv run python -m inbound.server
 ```
 
-The server will:
+**Outbound mode** (place calls):
+
+```bash
+uv run python -m outbound.server
+```
+
+The inbound server will:
 1. Start on port 8000
 2. Auto-configure Plivo webhooks for your phone number
 3. Display "Ready! Call +1234567890 to test"
 
 ### 5. Make a test call
 
-Call your Plivo phone number and start talking to the agent.
+**Inbound**: Call your Plivo phone number and start talking to the agent.
+
+**Outbound**: Use the API to place a call:
+
+```bash
+curl -X POST "http://localhost:8000/outbound/call?phone_number=+1234567890&opening_reason=your+demo+request"
+```
 
 ## Project Structure
 
 ```
 gemini-live-native/
-├── agent.py            # Voice agent with Gemini Live API
-├── server.py           # FastAPI server with Plivo webhooks
-├── tests/              # Integration and voice tests
-├── pyproject.toml      # Project dependencies
-├── .env.example         # Environment variable template
-└── Dockerfile          # Container deployment
+├── utils.py                # Shared config, audio conversion, phone normalization
+├── inbound/
+│   ├── agent.py            # GeminiVoiceBot + tools + run_agent()
+│   ├── server.py           # FastAPI inbound server
+│   └── system_prompt.md    # Inbound system prompt
+├── outbound/
+│   ├── agent.py            # GeminiVoiceBot + CallManager + outbound tools
+│   ├── server.py           # FastAPI outbound server
+│   └── system_prompt.md    # Outbound system prompt (templated)
+├── tests/                  # Integration, E2E, and live call tests
+├── pyproject.toml          # Project dependencies
+├── .env.example            # Environment variable template
+└── Dockerfile              # Container deployment
 ```
 
 ## How It Works
@@ -113,6 +135,26 @@ gemini-live-native/
 
 Audio conversion uses numpy for Python 3.11+ compatibility.
 
+## Outbound Call API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/outbound/call` | POST | Initiate an outbound call |
+| `/outbound/status/{call_id}` | GET | Get call status and details |
+| `/outbound/hangup/{call_id}` | POST | Programmatically end a call |
+| `/outbound/campaign/{campaign_id}` | GET | Get all calls for a campaign |
+
+### Initiate a call
+
+```bash
+curl -X POST "http://localhost:8000/outbound/call" \
+  -G \
+  --data-urlencode "phone_number=+1234567890" \
+  --data-urlencode "campaign_id=demo-campaign" \
+  --data-urlencode "opening_reason=your recent demo request for TechFlow Teams" \
+  --data-urlencode "objective=qualify interest and book a meeting with sales"
+```
+
 ## Function Calling
 
 The agent includes these functions:
@@ -125,27 +167,6 @@ The agent includes these functions:
 | `transfer_call` | Transfer to human agent |
 | `end_call` | End the conversation gracefully |
 
-To add custom functions, edit `agent.py`:
-
-```python
-# Add function declaration in _build_tools()
-types.FunctionDeclaration(
-    name="my_function",
-    description="What it does",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "param1": types.Schema(type=types.Type.STRING, description="..."),
-        },
-        required=["param1"],
-    ),
-)
-
-# Add handler in _handle_function_call()
-elif name == "my_function":
-    result = await my_function(args.get("param1"))
-```
-
 ## Configuration
 
 | Variable | Description | Default |
@@ -153,7 +174,7 @@ elif name == "my_function":
 | `GEMINI_API_KEY` | Google AI API key | Required |
 | `PLIVO_AUTH_ID` | Plivo Auth ID | Required |
 | `PLIVO_AUTH_TOKEN` | Plivo Auth Token | Required |
-| `PLIVO_PHONE_NUMBER` | Your Plivo phone number | Required |
+| `PLIVO_PHONE_NUMBER` | Plivo phone number (inbound + outbound caller ID) | Required |
 | `PUBLIC_URL` | Public URL for webhooks (ngrok) | Required |
 | `SERVER_PORT` | Server port | `8000` |
 | `GEMINI_MODEL` | Gemini model name | `gemini-2.5-flash-native-audio-preview-12-2025` |
@@ -172,6 +193,12 @@ uv sync --group dev
 uv run pytest tests/test_integration.py -v
 ```
 
+### Run E2E tests (requires GEMINI_API_KEY)
+
+```bash
+uv run pytest tests/test_e2e_live.py -v -s
+```
+
 ### Run multi-turn voice test
 
 Requires ffmpeg for TTS audio generation:
@@ -185,13 +212,36 @@ unzip ffmpeg.zip && chmod +x ffmpeg
 PATH="$PWD:$PATH" uv run python tests/test_multiturn_voice.py
 ```
 
+### Run live call tests (requires Plivo + ngrok)
+
+Live call tests require a second Plivo number (`PLIVO_TEST_NUMBER`) on the same account.
+It acts as the caller for inbound tests and the destination for outbound tests.
+
+```bash
+# Add to .env
+PLIVO_TEST_NUMBER=+1987654321
+
+# Run tests
+uv run pytest tests/test_live_call.py -v -s
+uv run pytest tests/test_outbound_call.py -v -s
+```
+
 ## Deployment
 
 ### Docker
 
+**Inbound mode** (default):
+
 ```bash
 docker build -t gemini-live-voice-agent .
 docker run -p 8000:8000 --env-file .env gemini-live-voice-agent
+```
+
+**Outbound mode**:
+
+```bash
+docker run -p 8000:8000 --env-file .env gemini-live-voice-agent \
+  uv run python -m outbound.server
 ```
 
 ## Troubleshooting

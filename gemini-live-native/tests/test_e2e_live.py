@@ -44,6 +44,7 @@ from dotenv import load_dotenv
 
 # Add parent to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils import ulaw_to_pcm
 
 load_dotenv()
 
@@ -67,8 +68,6 @@ pytestmark = pytest.mark.skipif(
 # =============================================================================
 # Helpers
 # =============================================================================
-
-from agent import ulaw_to_pcm
 
 
 def pcm16_to_wav(pcm_data: bytes, sample_rate: int = 8000) -> bytes:
@@ -155,7 +154,7 @@ def server_process():
 
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     proc = subprocess.Popen(
-        [sys.executable, "server.py"],
+        [sys.executable, "-m", "inbound.server"],
         cwd=project_dir,
         env=env,
         stdout=subprocess.PIPE,
@@ -222,9 +221,9 @@ class TestE2ELive:
 
         assert len(transcript) > 5, "Greeting transcript is too short"
         greeting_words = ["hello", "hi", "welcome", "help", "how", "assist", "alex", "techflow"]
-        assert any(
-            w in transcript.lower() for w in greeting_words
-        ), f"Greeting doesn't match expected content: {transcript}"
+        assert any(w in transcript.lower() for w in greeting_words), (
+            f"Greeting doesn't match expected content: {transcript}"
+        )
 
     @pytest.mark.asyncio
     async def test_agent_responds_to_text(self, server_process):
@@ -245,10 +244,14 @@ class TestE2ELive:
             print(f"\n[Greeting] {len(greeting)} bytes received")
 
             # Inject a text question (native agent supports 'text' events)
-            await ws.send(json.dumps({
-                "event": "text",
-                "text": "What plans do you offer and how much do they cost?",
-            }))
+            await ws.send(
+                json.dumps(
+                    {
+                        "event": "text",
+                        "text": "What plans do you offer and how much do they cost?",
+                    }
+                )
+            )
 
             response_audio = await collect_audio_from_ws(ws, timeout=25, min_bytes=3000)
 
@@ -266,8 +269,18 @@ class TestE2ELive:
 
         assert len(transcript) > 10, "Product response transcript is too short"
         product_words = [
-            "pro", "team", "enterprise", "twelve", "twenty", "dollar",
-            "month", "plan", "price", "cost", "12", "25",
+            "pro",
+            "team",
+            "enterprise",
+            "twelve",
+            "twenty",
+            "dollar",
+            "month",
+            "plan",
+            "price",
+            "cost",
+            "12",
+            "25",
         ]
         matches = [w for w in product_words if w in transcript.lower()]
         assert len(matches) >= 2, (
@@ -297,7 +310,10 @@ class TestE2ELive:
         rms = (sum(s**2 for s in samples) / len(samples)) ** 0.5
         duration_s = len(samples) / 8000
 
-        print(f"\n[Audio quality] RMS: {rms:.1f}, duration: {duration_s:.2f}s, samples: {len(samples)}")
+        print(
+            f"\n[Audio quality] RMS: {rms:.1f}, duration: {duration_s:.2f}s, "
+            f"samples: {len(samples)}"
+        )
         assert rms > 500, f"Audio RMS {rms:.1f} too low — likely silence"
         assert duration_s > 0.5, f"Audio too short: {duration_s:.2f}s"
 
