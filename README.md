@@ -40,7 +40,7 @@ These examples wire up separate providers for speech-to-text, language model, an
 |---------|-----|-----|-----|-----------|
 | [gemini-deepgram-cartesia-native](./gemini-deepgram-cartesia-native/) | Deepgram | Gemini | Cartesia | None |
 | [gemini-deepgram-elevenlabs-native](./gemini-deepgram-elevenlabs-native/) | Deepgram | Gemini | ElevenLabs | None |
-| [pipecat-plivo](./pipecat-plivo/) | Deepgram | OpenAI | OpenAI TTS | Pipecat |
+| [gpt4o-deepgram-openaitts-pipecat](./gpt4o-deepgram-openaitts-pipecat/) | Deepgram | GPT-4o-mini | GPT-4o-mini-TTS | Pipecat |
 | [daily-plivo](./daily-plivo/) | Deepgram | OpenAI | Cartesia | Pipecat + Daily |
 
 ## Prerequisites
