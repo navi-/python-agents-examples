@@ -161,6 +161,14 @@ Note: `_pending` with underscore prefix avoids RUF059 lint warning.
 - All commands run through `uv run`: `uv run pytest`, `uv run ruff check .`, `uv run python -m inbound.server`
 - `uv.lock` is committed to git for reproducible builds
 
+## Git Workflow
+
+- **Never commit directly to `main`**. Always create a feature branch first:
+  `git checkout -b {example-name}` (or `git checkout -b fix/{description}` for fixes)
+- Push to the `fork` remote (not `origin`, which has IP restrictions):
+  `git push -u fork {branch-name}`
+- Open a PR from the fork branch to `origin/main` when ready.
+
 ## Code Quality
 
 - `from __future__ import annotations` at top of every `.py` file
