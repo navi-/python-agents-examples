@@ -16,7 +16,6 @@ import numpy as np
 import phonenumbers
 from dotenv import load_dotenv
 from loguru import logger
-from scipy import signal as scipy_signal
 
 load_dotenv()
 
@@ -25,10 +24,6 @@ load_dotenv()
 # =============================================================================
 
 DEFAULT_COUNTRY_CODE = os.getenv("DEFAULT_COUNTRY_CODE", "US")
-
-# Audio format constants
-PLIVO_SAMPLE_RATE = 8000  # Plivo uses 8kHz mu-law
-GEMINI_SAMPLE_RATE = 24000  # Gemini default PCM sample rate
 
 # =============================================================================
 # Phone Number Utilities
@@ -119,25 +114,3 @@ def pcm_to_ulaw(pcm_data: bytes) -> bytes:
     return ulaw.astype(np.uint8).tobytes()
 
 
-def resample_audio(audio_data: bytes, input_rate: int, output_rate: int) -> bytes:
-    """Resample audio from one sample rate to another."""
-    if input_rate == output_rate:
-        return audio_data
-
-    samples = np.frombuffer(audio_data, dtype=np.int16)
-    ratio = output_rate / input_rate
-    new_length = int(len(samples) * ratio)
-    resampled = scipy_signal.resample(samples.astype(np.float64), new_length)
-    return np.clip(resampled, -32768, 32767).astype(np.int16).tobytes()
-
-
-def plivo_to_gemini(mulaw_8k: bytes) -> bytes:
-    """Convert Plivo audio (mu-law 8kHz) to Gemini format (PCM16 24kHz)."""
-    pcm_8k = ulaw_to_pcm(mulaw_8k)
-    return resample_audio(pcm_8k, PLIVO_SAMPLE_RATE, GEMINI_SAMPLE_RATE)
-
-
-def gemini_to_plivo(pcm_24k: bytes) -> bytes:
-    """Convert Gemini audio (PCM16 24kHz) to Plivo format (mu-law 8kHz)."""
-    pcm_8k = resample_audio(pcm_24k, GEMINI_SAMPLE_RATE, PLIVO_SAMPLE_RATE)
-    return pcm_to_ulaw(pcm_8k)

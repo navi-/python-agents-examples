@@ -903,8 +903,6 @@ dependencies = [
     { name = "pipecat-ai", extra = ["google", "silero"] },
     { name = "plivo" },
     { name = "python-dotenv" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "scipy", version = "1.17.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
 ]
@@ -929,7 +927,6 @@ requires-dist = [
     { name = "pipecat-ai", extras = ["google", "silero"], specifier = ">=0.0.97" },
     { name = "plivo", specifier = ">=4.59.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "scipy", specifier = ">=1.10.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
     { name = "websockets", specifier = ">=13.0" },
 ]
