@@ -164,19 +164,25 @@ class TestUnitAssistantConfig:
 
         config = build_assistant_config(
             server_url="https://example.com/vapi/webhook",
-            from_number="+15551234567",
         )
 
         assert config["firstMessage"]
+        assert config["firstMessageMode"] == "assistant-speaks-first"
         assert config["transcriber"]["provider"] == "deepgram"
         assert config["model"]["provider"] == "openai"
         assert config["model"]["model"] == "gpt-4.1"
         assert config["voice"]["provider"] == "11labs"
-        assert config["serverUrl"] == "https://example.com/vapi/webhook"
+        assert config["server"]["url"] == "https://example.com/vapi/webhook"
         assert config["backgroundDenoisingEnabled"] is True
         assert "stopSpeakingPlan" in config
         assert "startSpeakingPlan" in config
         assert "transcriptionEndpointingPlan" in config["startSpeakingPlan"]
+        # Vapi-recommended fields
+        assert config["endCallMessage"]
+        assert "goodbye" in config["endCallPhrases"]
+        assert "tool-calls" in config["serverMessages"]
+        assert "end-of-call-report" in config["serverMessages"]
+        assert config["analysisPlan"]["summaryPlan"]["enabled"] is True
 
     def test_build_outbound_config(self):
         """Test building outbound assistant config."""
@@ -199,8 +205,33 @@ class TestUnitAssistantConfig:
         assert config["transcriber"]["provider"] == "deepgram"
         assert config["model"]["provider"] == "openai"
         assert config["voice"]["provider"] == "11labs"
+        assert config["server"]["url"] == "https://example.com/vapi/webhook"
         assert config["backgroundDenoisingEnabled"] is True
         assert "stopSpeakingPlan" in config
+        # Vapi-recommended fields
+        assert config["voicemailMessage"]
+        assert "goodbye" in config["endCallPhrases"]
+        assert "tool-calls" in config["serverMessages"]
+        assert config["analysisPlan"]["summaryPlan"]["enabled"] is True
+
+    def test_config_has_native_end_call(self):
+        """Test that config uses native endCall tool type."""
+        from inbound.agent import build_assistant_config
+
+        config = build_assistant_config(server_url="https://example.com/vapi/webhook")
+        tools = config["model"]["tools"]
+        end_call_tools = [t for t in tools if t.get("type") == "endCall"]
+        assert len(end_call_tools) == 1
+
+    def test_config_has_native_transfer_call(self):
+        """Test that config uses native transferCall tool type."""
+        from inbound.agent import build_assistant_config
+
+        config = build_assistant_config(server_url="https://example.com/vapi/webhook")
+        tools = config["model"]["tools"]
+        transfer_tools = [t for t in tools if t.get("type") == "transferCall"]
+        assert len(transfer_tools) == 1
+        assert "destinations" in transfer_tools[0]
 
     def test_inbound_config_has_vad_settings(self):
         """Test that inbound config includes VAD and turn detection settings."""
@@ -228,19 +259,17 @@ class TestUnitWebhookHandling:
 
     @pytest.mark.asyncio
     async def test_handle_tool_calls(self):
-        """Test handling tool calls from Vapi."""
+        """Test handling tool calls from Vapi (top-level name/arguments format)."""
         from inbound.agent import handle_tool_calls
 
         message = {
             "toolCallList": [
                 {
                     "id": "tc-1",
-                    "function": {
-                        "name": "send_sms",
-                        "arguments": {
-                            "phone_number": "+15551234567",
-                            "message": "Your order has shipped!",
-                        },
+                    "name": "send_sms",
+                    "arguments": {
+                        "phone_number": "+15551234567",
+                        "message": "Your order has shipped!",
                     },
                 }
             ]
@@ -249,31 +278,10 @@ class TestUnitWebhookHandling:
         results = await handle_tool_calls(message)
         assert len(results) == 1
         assert results[0]["toolCallId"] == "tc-1"
+        assert results[0]["name"] == "send_sms"
 
         result_data = json.loads(results[0]["result"])
         assert result_data["status"] == "sent"
-
-    @pytest.mark.asyncio
-    async def test_handle_end_call_tool(self):
-        """Test handling end_call tool call."""
-        from inbound.agent import handle_tool_calls
-
-        message = {
-            "toolCallList": [
-                {
-                    "id": "tc-2",
-                    "function": {
-                        "name": "end_call",
-                        "arguments": {"reason": "Customer satisfied"},
-                    },
-                }
-            ]
-        }
-
-        results = await handle_tool_calls(message)
-        assert len(results) == 1
-        result_data = json.loads(results[0]["result"])
-        assert result_data["status"] == "call_ending"
 
     @pytest.mark.asyncio
     async def test_handle_unknown_tool(self):
@@ -284,15 +292,14 @@ class TestUnitWebhookHandling:
             "toolCallList": [
                 {
                     "id": "tc-3",
-                    "function": {
-                        "name": "nonexistent_function",
-                        "arguments": {},
-                    },
+                    "name": "nonexistent_function",
+                    "arguments": {},
                 }
             ]
         }
 
         results = await handle_tool_calls(message)
+        assert results[0]["name"] == "nonexistent_function"
         result_data = json.loads(results[0]["result"])
         assert "error" in result_data
 
@@ -399,12 +406,10 @@ class TestLocalIntegration:
                         "toolCallList": [
                             {
                                 "id": "tc-test",
-                                "function": {
-                                    "name": "send_sms",
-                                    "arguments": {
-                                        "phone_number": "+15551234567",
-                                        "message": "Test message",
-                                    },
+                                "name": "send_sms",
+                                "arguments": {
+                                    "phone_number": "+15551234567",
+                                    "message": "Test message",
                                 },
                             }
                         ],

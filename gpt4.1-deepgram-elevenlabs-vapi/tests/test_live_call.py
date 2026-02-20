@@ -71,11 +71,12 @@ def test_inbound_call_greeting(live_call_configured):
     logger.info(f"Placing inbound test call: {from_number} -> {to_number}")
 
     # Place a test call — Plivo routes through SIP trunk to Vapi
-    # answer_url is for the calling leg (test number) — just play hold music
+    # answer_url is for the calling leg (test number) — keep alive silently
+    hold_url = f"{PUBLIC_URL}/hold" if PUBLIC_URL else ""
     call = client.calls.create(
         from_=from_number,
         to_=to_number,
-        answer_url="https://s3.amazonaws.com/plivosupport/hold_music.xml",
+        answer_url=hold_url,
         answer_method="GET",
         ring_timeout=30,
         time_limit=30,

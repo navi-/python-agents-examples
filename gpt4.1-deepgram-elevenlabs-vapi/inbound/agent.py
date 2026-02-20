@@ -33,7 +33,6 @@ GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4.1")
 DEEPGRAM_MODEL = os.getenv("DEEPGRAM_MODEL", "nova-3")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
 ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
-VAPI_ASSISTANT_ID = os.getenv("VAPI_ASSISTANT_ID", "")
 
 # =============================================================================
 # System Prompt
@@ -66,7 +65,7 @@ TOOL_DEFINITIONS = [
                 },
             },
         },
-        "server": {"url": None},  # Uses assistant's serverUrl
+        "server": {"url": None},  # Uses assistant's server.url
     },
     {
         "type": "function",
@@ -102,40 +101,20 @@ TOOL_DEFINITIONS = [
         },
         "server": {"url": None},
     },
+    # Native Vapi tool types — no custom handler needed
     {
-        "type": "function",
-        "function": {
-            "name": "transfer_call",
-            "description": "Transfer call to human agent.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "department": {"type": "string", "description": "Department"},
-                    "reason": {"type": "string", "description": "Transfer reason"},
-                },
-                "required": ["department", "reason"],
-            },
-        },
-        "server": {"url": None},
+        "type": "endCall",
     },
     {
-        "type": "function",
-        "function": {
-            "name": "end_call",
-            "description": "End the call gracefully when the conversation is complete.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {"type": "string", "description": "Reason for ending"},
-                    "resolution": {
-                        "type": "string",
-                        "description": "How the issue was resolved",
-                    },
-                },
+        "type": "transferCall",
+        "destinations": [
+            {
+                "type": "number",
+                "number": "+13305263709",
+                "message": "I'm transferring you to a specialist now. Please hold.",
+                "description": "Transfer to customer support specialist",
             },
-        },
-        "async": False,
-        "server": {"url": None},
+        ],
     },
 ]
 
@@ -214,18 +193,6 @@ async def schedule_callback(
     }
 
 
-async def transfer_call(department: str, reason: str) -> dict[str, Any]:
-    """Transfer call to human agent. Replace with your actual implementation."""
-    logger.info(f"Transferring to {department}: {reason}")
-
-    return {
-        "status": "transferring",
-        "department": department,
-        "reason": reason,
-        "estimated_wait": "less than 2 minutes",
-    }
-
-
 # =============================================================================
 # Webhook Event Handlers
 # =============================================================================
@@ -234,22 +201,24 @@ TOOL_HANDLERS = {
     "check_order_status": check_order_status,
     "send_sms": send_sms,
     "schedule_callback": schedule_callback,
-    "transfer_call": transfer_call,
 }
 
 
 async def handle_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
-    """Execute tool calls from Vapi and return results."""
+    """Execute tool calls from Vapi and return results.
+
+    Vapi sends tool calls with top-level ``name`` and ``arguments`` fields
+    (not nested under a ``function`` key).
+    """
     tool_call_list = message.get("toolCallList", [])
     results = []
 
     for tool_call in tool_call_list:
-        function_info = tool_call.get("function", {})
-        name = function_info.get("name", "")
+        name = tool_call.get("name", "")
         tool_call_id = tool_call.get("id", "")
 
         try:
-            arguments = function_info.get("arguments", {})
+            arguments = tool_call.get("arguments", {})
             if isinstance(arguments, str):
                 arguments = json.loads(arguments) if arguments else {}
         except json.JSONDecodeError:
@@ -260,40 +229,33 @@ async def handle_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
         handler = TOOL_HANDLERS.get(name)
         if handler:
             result = await handler(**arguments)
-        elif name == "end_call":
-            logger.info(f"Ending call: {arguments.get('reason')}")
-            result = {"status": "call_ending", "reason": arguments.get("reason", "")}
         else:
             result = {"error": f"Unknown function: {name}"}
 
-        results.append({"toolCallId": tool_call_id, "result": json.dumps(result)})
+        results.append({
+            "name": name,
+            "toolCallId": tool_call_id,
+            "result": json.dumps(result),
+        })
 
     return results
 
 
-def build_assistant_config(server_url: str, from_number: str = "") -> dict[str, Any]:
+def build_assistant_config(server_url: str) -> dict[str, Any]:
     """Build a transient Vapi assistant configuration for inbound calls.
 
     This is returned in response to the assistant-request webhook so Vapi
     knows how to configure the call pipeline dynamically.
+
+    Caller context (phone number, time) is provided via Vapi template variables
+    in the system prompt — no server-side interpolation needed.
     """
-    system_prompt = SYSTEM_PROMPT
-
-    if from_number:
-        call_time = datetime.now().strftime("%I:%M %p on %A, %B %d")
-        system_prompt += f"""
-
-## Current Call Context
-- Caller's phone number: {from_number}
-- Time: {call_time}
-
-You can use the caller's phone number for SMS or callbacks without asking."""
-
     config: dict[str, Any] = {
         "firstMessage": (
             "Hello! Thank you for calling TechFlow. This is Alex. "
             "How can I help you today?"
         ),
+        "firstMessageMode": "assistant-speaks-first",
         "transcriber": {
             "provider": "deepgram",
             "model": DEEPGRAM_MODEL,
@@ -305,7 +267,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
             "messages": [
                 {
                     "role": "system",
-                    "content": system_prompt,
+                    "content": SYSTEM_PROMPT,
                 }
             ],
             "temperature": 0.7,
@@ -318,9 +280,25 @@ You can use the caller's phone number for SMS or callbacks without asking."""
             "stability": 0.5,
             "similarityBoost": 0.75,
         },
-        "serverUrl": server_url,
+        "server": {"url": server_url},
+        "serverMessages": [
+            "tool-calls",
+            "status-update",
+            "end-of-call-report",
+            "transcript",
+            "user-interrupted",
+        ],
+        "endCallMessage": "Thank you for calling TechFlow. Have a great day!",
+        "endCallPhrases": ["goodbye", "bye bye", "that's all", "nothing else"],
         "recordingEnabled": True,
         "backgroundDenoisingEnabled": True,
+        "analysisPlan": {
+            "summaryPlan": {"enabled": True},
+            "successEvaluationPlan": {
+                "enabled": True,
+                "rubric": "AutomaticRubric",
+            },
+        },
         # VAD and turn detection configuration
         "stopSpeakingPlan": {
             "numWords": 2,
@@ -338,54 +316,3 @@ You can use the caller's phone number for SMS or callbacks without asking."""
     }
 
     return config
-
-
-async def create_or_get_assistant() -> str:
-    """Create a Vapi assistant or return the existing one from env.
-
-    Returns the assistant ID.
-    """
-    if VAPI_ASSISTANT_ID:
-        return VAPI_ASSISTANT_ID
-
-    if not VAPI_PRIVATE_KEY:
-        logger.error("VAPI_PRIVATE_KEY is required to create an assistant")
-        return ""
-
-    from vapi import AsyncVapi
-
-    client = AsyncVapi(token=VAPI_PRIVATE_KEY)
-
-    assistant = await client.assistants.create(
-        name="TechFlow Inbound Agent (GPT-4.1 + Deepgram + ElevenLabs)",
-        first_message=(
-            "Hello! Thank you for calling TechFlow. This is Alex. "
-            "How can I help you today?"
-        ),
-        transcriber={
-            "provider": "deepgram",
-            "model": DEEPGRAM_MODEL,
-            "language": "en",
-        },
-        model={
-            "provider": "openai",
-            "model": GPT_MODEL,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT,
-                }
-            ],
-            "temperature": 0.7,
-        },
-        voice={
-            "provider": "11labs",
-            "voiceId": ELEVENLABS_VOICE_ID,
-            "model": ELEVENLABS_MODEL,
-        },
-        recording_enabled=True,
-        background_denoising_enabled=True,
-    )
-
-    logger.info(f"Created Vapi assistant: {assistant.id}")
-    return assistant.id

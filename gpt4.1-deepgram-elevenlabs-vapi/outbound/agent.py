@@ -88,6 +88,8 @@ class OutboundCallRecord:
     duration: int = 0
     ended_reason: str = ""
     outcome: str = ""  # success|no_answer|busy|failed
+    transcript: str = ""
+    recording_url: str = ""
 
 
 def determine_outcome(ended_reason: str, duration: int) -> str:
@@ -249,18 +251,6 @@ async def schedule_callback(
     }
 
 
-async def transfer_call(department: str, reason: str) -> dict[str, Any]:
-    """Transfer call to human agent. Replace with your actual implementation."""
-    logger.info(f"Transferring to {department}: {reason}")
-
-    return {
-        "status": "transferring",
-        "department": department,
-        "reason": reason,
-        "estimated_wait": "less than 2 minutes",
-    }
-
-
 # =============================================================================
 # Webhook Handling
 # =============================================================================
@@ -268,22 +258,24 @@ async def transfer_call(department: str, reason: str) -> dict[str, Any]:
 TOOL_HANDLERS = {
     "send_sms": send_sms,
     "schedule_callback": schedule_callback,
-    "transfer_call": transfer_call,
 }
 
 
 async def handle_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
-    """Execute tool calls from Vapi and return results."""
+    """Execute tool calls from Vapi and return results.
+
+    Vapi sends tool calls with top-level ``name`` and ``arguments`` fields
+    (not nested under a ``function`` key).
+    """
     tool_call_list = message.get("toolCallList", [])
     results = []
 
     for tool_call in tool_call_list:
-        function_info = tool_call.get("function", {})
-        name = function_info.get("name", "")
+        name = tool_call.get("name", "")
         tool_call_id = tool_call.get("id", "")
 
         try:
-            arguments = function_info.get("arguments", {})
+            arguments = tool_call.get("arguments", {})
             if isinstance(arguments, str):
                 arguments = json.loads(arguments) if arguments else {}
         except json.JSONDecodeError:
@@ -294,13 +286,14 @@ async def handle_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
         handler = TOOL_HANDLERS.get(name)
         if handler:
             result = await handler(**arguments)
-        elif name == "end_call":
-            logger.info(f"Ending call: {arguments.get('reason')}")
-            result = {"status": "call_ending", "reason": arguments.get("reason", "")}
         else:
             result = {"error": f"Unknown function: {name}"}
 
-        results.append({"toolCallId": tool_call_id, "result": json.dumps(result)})
+        results.append({
+            "name": name,
+            "toolCallId": tool_call_id,
+            "result": json.dumps(result),
+        })
 
     return results
 
@@ -345,41 +338,26 @@ def build_outbound_assistant_config(
             },
             "server": {"url": None},
         },
+        # Native Vapi tool types — no custom handler needed
         {
-            "type": "function",
-            "function": {
-                "name": "transfer_call",
-                "description": "Transfer call to human agent.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "department": {"type": "string", "description": "Department"},
-                        "reason": {"type": "string", "description": "Transfer reason"},
-                    },
-                    "required": ["department", "reason"],
-                },
-            },
-            "server": {"url": None},
+            "type": "endCall",
         },
         {
-            "type": "function",
-            "function": {
-                "name": "end_call",
-                "description": "End the call gracefully.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "reason": {"type": "string", "description": "Reason for ending"},
-                    },
+            "type": "transferCall",
+            "destinations": [
+                {
+                    "type": "number",
+                    "number": "+13305263709",
+                    "message": "I'm transferring you to a specialist now. Please hold.",
+                    "description": "Transfer to sales specialist",
                 },
-            },
-            "async": False,
-            "server": {"url": None},
+            ],
         },
     ]
 
     return {
         "firstMessage": record.initial_message,
+        "firstMessageMode": "assistant-speaks-first",
         "transcriber": {
             "provider": "deepgram",
             "model": DEEPGRAM_MODEL,
@@ -404,9 +382,28 @@ def build_outbound_assistant_config(
             "stability": 0.5,
             "similarityBoost": 0.75,
         },
-        "serverUrl": server_url,
+        "server": {"url": server_url},
+        "serverMessages": [
+            "tool-calls",
+            "status-update",
+            "end-of-call-report",
+            "transcript",
+            "user-interrupted",
+        ],
+        "endCallPhrases": ["goodbye", "bye bye", "that's all", "not interested"],
+        "voicemailMessage": (
+            "Hi, this is Alex from TechFlow. I was calling about your recent sign-up. "
+            "Please call us back at your convenience. Thank you!"
+        ),
         "recordingEnabled": True,
         "backgroundDenoisingEnabled": True,
+        "analysisPlan": {
+            "summaryPlan": {"enabled": True},
+            "successEvaluationPlan": {
+                "enabled": True,
+                "rubric": "AutomaticRubric",
+            },
+        },
         # VAD and turn detection configuration
         "stopSpeakingPlan": {
             "numWords": 2,
