@@ -369,6 +369,15 @@ def plivo_to_sarvam(mulaw_8k: bytes) -> bytes:
     return resample_audio(pcm_8k, PLIVO_SAMPLE_RATE, SARVAM_SAMPLE_RATE)
 
 
+def plivo_to_sarvam_streaming(mulaw_8k: bytes) -> bytes:
+    """Convert Plivo audio (μ-law 8kHz) to Sarvam streaming format (PCM16 8kHz).
+
+    Unlike plivo_to_sarvam() which resamples to 16kHz for the batch API,
+    the streaming WebSocket API accepts 8kHz directly — no resampling needed.
+    """
+    return ulaw_to_pcm(mulaw_8k)
+
+
 def elevenlabs_to_plivo(pcm_24k: bytes) -> bytes:
     """Convert ElevenLabs audio (PCM16 24kHz) to Plivo format (μ-law 8kHz)."""
     pcm_8k = resample_audio(pcm_24k, ELEVENLABS_SAMPLE_RATE, PLIVO_SAMPLE_RATE)
