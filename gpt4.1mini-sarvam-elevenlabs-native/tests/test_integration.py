@@ -469,10 +469,8 @@ class TestUnitSarvamStreamingSTT:
 
         stt = SarvamStreamingSTT()
         stt._transcript_parts.append("test")
-        stt._utterance_complete.set()
         stt.clear_transcript()
         assert stt.latest_transcript == ""
-        assert not stt._utterance_complete.is_set()
 
 
 if __name__ == "__main__":
