@@ -1,7 +1,7 @@
 [project]
 name = "gpt4-1mini-gpt4-1-deepgram-elevenlabs-native"
 version = "0.1.0"
-description = "Dual-LLM lead qualification voice agent: GPT-4.1 mini (conversation) + GPT-4.1 (reasoning) + Deepgram nova-3 STT + ElevenLabs TTS + smart-turn-v2 + Plivo telephony"
+description = "Dual-LLM lead qualification voice agent: GPT-4.1 mini (conversation) + GPT-4.1 (reasoning) + Deepgram nova-3 STT + ElevenLabs TTS + smart-turn-v3 + Plivo telephony"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -19,6 +19,20 @@ dependencies = [
     "silero-vad>=5.1",
     "torch>=2.0.0",
     "transformers>=4.40.0",
+    "onnxruntime>=1.17.0",
+    "huggingface-hub>=0.20.0",
+]
+
+[project.optional-dependencies]
+observability = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+    "opentelemetry-instrumentation-httpx>=0.44b0",
+    "traceloop-sdk>=0.30.0",
+]
+streaming = [
+    "redis[hiredis]>=5.0.0",
 ]
 
 [dependency-groups]
