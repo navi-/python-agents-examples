@@ -1,1 +1,1 @@
-# Tests for gemini-deepgram-elevenlabs-native voice agent
+# Integration tests for Gemini-Deepgram-ElevenLabs Voice Agent

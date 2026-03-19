@@ -1,7 +1,6 @@
-"""Shared configuration, utilities, and audio processing.
+"""Shared utilities and audio processing.
 
 This module provides:
-- Configuration loaded from environment variables
 - Phone number normalization
 - Audio format conversion (μ-law <-> PCM, resampling)
 - Silero VAD processor for voice activity detection
@@ -21,26 +20,10 @@ from silero_vad import load_silero_vad
 load_dotenv()
 
 # =============================================================================
-# Configuration
+# Configuration (only constants consumed by utility functions)
 # =============================================================================
 
-# Server
-SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
-
-# Plivo credentials
-PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
-PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
-PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
 DEFAULT_COUNTRY_CODE = os.getenv("DEFAULT_COUNTRY_CODE", "US")
-
-# Public URL for webhooks (ngrok URL or production domain)
-PUBLIC_URL = os.getenv("PUBLIC_URL", "")
-
-# xAI / Grok
-XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-3-fast-voice")
-GROK_VOICE = os.getenv("GROK_VOICE", "Sal")
-XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime"
 
 # Audio format constants
 PLIVO_SAMPLE_RATE = 8000  # Plivo uses 8kHz μ-law

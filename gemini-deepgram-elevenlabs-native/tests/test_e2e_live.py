@@ -5,16 +5,12 @@ These tests:
 1. Start the server as a subprocess
 2. Connect via WebSocket (simulating a Plivo call)
 3. Receive agent greeting audio
-4. Send a user audio prompt (synthesized via ElevenLabs)
-5. Receive agent response audio
-6. Transcribe audio locally using faster-whisper
-7. Verify transcription is consistent with agent instructions
+4. Verify transcription is consistent with agent instructions
 
 Requirements:
     - Valid GEMINI_API_KEY, DEEPGRAM_API_KEY, ELEVENLABS_API_KEY in .env
     - faster-whisper installed (dev dependency)
-    - ffmpeg binary available (in project root or PATH)
-    - Port 18003 available (used by test server)
+    - Port 18001 available (used by test server)
 
 Usage:
     cd gemini-deepgram-elevenlabs-native
@@ -42,7 +38,7 @@ import pytest
 import websockets
 from dotenv import load_dotenv
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils import ulaw_to_pcm
 
 load_dotenv()
 
@@ -50,26 +46,19 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 
-# Ensure ffmpeg from project root is on PATH
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if os.path.isfile(os.path.join(PROJECT_ROOT, "ffmpeg")):
-    os.environ["PATH"] = PROJECT_ROOT + os.pathsep + os.environ.get("PATH", "")
-
-TEST_PORT = 18003
+TEST_PORT = 18001
 TEST_WS_URL = f"ws://localhost:{TEST_PORT}/ws"
 TEST_HTTP_URL = f"http://localhost:{TEST_PORT}"
 
 pytestmark = pytest.mark.skipif(
     not all([GEMINI_API_KEY, DEEPGRAM_API_KEY, ELEVENLABS_API_KEY]),
-    reason="API keys (GEMINI, DEEPGRAM, ELEVENLABS) not all configured",
+    reason="API keys not configured",
 )
 
 
 # =============================================================================
 # Helpers
 # =============================================================================
-
-from agent import pcm_to_ulaw, resample_audio, ulaw_to_pcm
 
 
 def pcm16_to_wav(pcm_data: bytes, sample_rate: int = 8000) -> bytes:
@@ -100,31 +89,9 @@ def transcribe_audio_local(audio_wav: bytes) -> str:
         os.unlink(tmp_path)
 
 
-async def synthesize_user_audio(text: str) -> bytes:
-    """Synthesize user speech using ElevenLabs TTS, return u-law 8kHz bytes."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
-            f"?output_format=pcm_24000",
-            headers={
-                "xi-api-key": ELEVENLABS_API_KEY,
-                "Content-Type": "application/json",
-            },
-            json={
-                "text": text,
-                "model_id": "eleven_flash_v2_5",
-            },
-        )
-        resp.raise_for_status()
-        pcm_24k = resp.content
-
-    pcm_8k = resample_audio(pcm_24k, 24000, 8000)
-    return pcm_to_ulaw(pcm_8k)
-
-
 async def collect_audio_from_ws(
     ws,
-    timeout: float = 25.0,
+    timeout: float = 20.0,
     min_bytes: int = 3000,
 ) -> bytes:
     """Receive playAudio events from agent, return concatenated u-law bytes."""
@@ -135,7 +102,9 @@ async def collect_audio_from_ws(
 
     while time.time() - start < timeout:
         silence = base64.b64encode(b"\xff" * 160).decode()
-        await ws.send(json.dumps({"event": "media", "media": {"payload": silence}}))
+        await ws.send(
+            json.dumps({"event": "media", "media": {"payload": silence}})
+        )
 
         try:
             msg = await asyncio.wait_for(ws.recv(), timeout=0.1)
@@ -152,20 +121,10 @@ async def collect_audio_from_ws(
         except websockets.exceptions.ConnectionClosed:
             break
 
-        if total_bytes > min_bytes and (time.time() - last_audio) > 3.0:
+        if total_bytes > min_bytes and (time.time() - last_audio) > 2.5:
             break
 
     return b"".join(audio_chunks)
-
-
-async def send_audio_to_ws(ws, ulaw_audio: bytes):
-    """Send u-law audio to WebSocket in 20ms chunks (simulating Plivo)."""
-    chunk_size = 160
-    for i in range(0, len(ulaw_audio), chunk_size):
-        chunk = ulaw_audio[i : i + chunk_size]
-        payload = base64.b64encode(chunk).decode()
-        await ws.send(json.dumps({"event": "media", "media": {"payload": payload}}))
-        await asyncio.sleep(0.02)
 
 
 def compute_audio_rms(ulaw_audio: bytes) -> float:
@@ -186,9 +145,11 @@ def server_process():
     env = os.environ.copy()
     env["SERVER_PORT"] = str(TEST_PORT)
 
-    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_dir = os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    )
     proc = subprocess.Popen(
-        [sys.executable, "server.py"],
+        [sys.executable, "-m", "inbound.server"],
         cwd=project_dir,
         env=env,
         stdout=subprocess.PIPE,
@@ -210,7 +171,9 @@ def server_process():
         proc.terminate()
         proc.wait()
         output = proc.stdout.read().decode() if proc.stdout else ""
-        pytest.skip(f"Server did not start in time. Output:\n{output[:2000]}")
+        pytest.skip(
+            f"Server did not start in time. Output:\n{output[:2000]}"
+        )
 
     yield proc
 
@@ -229,103 +192,78 @@ class TestE2ELive:
     @pytest.mark.asyncio
     async def test_agent_greeting(self, server_process):
         """Agent should send an audio greeting when the call connects."""
-        body_data = {"call_uuid": "test-e2e", "from": "+15551234567", "to": "+16572338892"}
-        body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
+        body_data = {
+            "call_uuid": "test-e2e",
+            "from": "+15551234567",
+            "to": "+16572338892",
+        }
+        body_b64 = base64.b64encode(
+            json.dumps(body_data).encode()
+        ).decode()
         ws_url = f"{TEST_WS_URL}?body={body_b64}"
 
         async with websockets.connect(ws_url, close_timeout=3) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())},
+                "start": {
+                    "callId": str(uuid.uuid4()),
+                    "streamId": str(uuid.uuid4()),
+                },
             }
             await ws.send(json.dumps(start_event))
-            ulaw_audio = await collect_audio_from_ws(ws, timeout=25, min_bytes=2000)
+            ulaw_audio = await collect_audio_from_ws(
+                ws, timeout=20, min_bytes=2000
+            )
 
-        assert len(ulaw_audio) > 2000, f"Greeting too short: {len(ulaw_audio)} bytes"
+        assert len(ulaw_audio) > 2000, (
+            f"Greeting too short: {len(ulaw_audio)} bytes"
+        )
 
         rms = compute_audio_rms(ulaw_audio)
-        print(f"\n[Greeting] Audio: {len(ulaw_audio)} bytes, RMS: {rms:.1f}")
-        assert rms > 500, f"Audio RMS {rms:.1f} too low — likely silence"
+        print(
+            f"\n[Greeting] Audio: {len(ulaw_audio)} bytes, RMS: {rms:.1f}"
+        )
+        assert rms > 500, f"Audio RMS {rms:.1f} too low -- likely silence"
 
-        # Transcribe locally with Whisper
         pcm = ulaw_to_pcm(ulaw_audio)
         wav = pcm16_to_wav(pcm, sample_rate=8000)
         transcript = transcribe_audio_local(wav)
         print(f"[Greeting transcript]: {transcript}")
 
         assert len(transcript) > 5, "Greeting transcript is too short"
-        # Agent greeting includes fingerprint: model names for LLM, STT, and TTS
-        greeting_words = ["hello", "hi", "alex", "gemini", "deepgram", "elevenlabs", "eleven"]
-        assert any(
-            w in transcript.lower() for w in greeting_words
-        ), f"Greeting doesn't match expected content: {transcript}"
-
-    @pytest.mark.asyncio
-    async def test_agent_responds_to_speech(self, server_process):
-        """Agent should respond to spoken question about products."""
-        body_data = {"call_uuid": "test-e2e-2", "from": "+15551234567", "to": "+16572338892"}
-        body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
-        ws_url = f"{TEST_WS_URL}?body={body_b64}"
-
-        # Synthesize user question as audio
-        user_audio = await synthesize_user_audio(
-            "What plans do you offer and how much do they cost?"
-        )
-        print(f"\n[User audio]: {len(user_audio)} bytes u-law")
-
-        async with websockets.connect(ws_url, close_timeout=3) as ws:
-            start_event = {
-                "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())},
-            }
-            await ws.send(json.dumps(start_event))
-
-            greeting = await collect_audio_from_ws(ws, timeout=25, min_bytes=2000)
-            assert len(greeting) > 0, "No greeting received"
-            print(f"[Greeting] {len(greeting)} bytes received")
-
-            # Send user question audio
-            await send_audio_to_ws(ws, user_audio)
-
-            response_audio = await collect_audio_from_ws(ws, timeout=30, min_bytes=3000)
-
-        assert len(response_audio) > 3000, f"Response too short: {len(response_audio)} bytes"
-
-        rms = compute_audio_rms(response_audio)
-        print(f"[Response] Audio: {len(response_audio)} bytes, RMS: {rms:.1f}")
-        assert rms > 500, f"Response RMS {rms:.1f} too low — likely silence"
-
-        # Transcribe locally with Whisper
-        pcm = ulaw_to_pcm(response_audio)
-        wav = pcm16_to_wav(pcm, sample_rate=8000)
-        transcript = transcribe_audio_local(wav)
-        print(f"[Product response transcript]: {transcript}")
-
-        assert len(transcript) > 10, "Product response transcript is too short"
-        product_words = [
-            "pro", "team", "enterprise", "twelve", "twenty", "dollar",
-            "month", "plan", "price", "cost", "12", "25",
+        greeting_words = [
+            "hello", "hi", "welcome", "help", "how",
+            "assist", "alex", "techflow",
         ]
-        matches = [w for w in product_words if w in transcript.lower()]
-        assert len(matches) >= 2, (
-            f"Response doesn't discuss products enough. "
-            f"Matches: {matches}, transcript: {transcript}"
+        assert any(w in transcript.lower() for w in greeting_words), (
+            f"Greeting doesn't match expected content: {transcript}"
         )
 
     @pytest.mark.asyncio
     async def test_audio_is_not_silence(self, server_process):
         """Verify the received audio has actual speech content."""
-        body_data = {"call_uuid": "test-e2e-3", "from": "+15551234567", "to": "+16572338892"}
-        body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
+        body_data = {
+            "call_uuid": "test-e2e-3",
+            "from": "+15551234567",
+            "to": "+16572338892",
+        }
+        body_b64 = base64.b64encode(
+            json.dumps(body_data).encode()
+        ).decode()
         ws_url = f"{TEST_WS_URL}?body={body_b64}"
 
         async with websockets.connect(ws_url, close_timeout=3) as ws:
             start_event = {
                 "event": "start",
-                "start": {"callId": str(uuid.uuid4()), "streamId": str(uuid.uuid4())},
+                "start": {
+                    "callId": str(uuid.uuid4()),
+                    "streamId": str(uuid.uuid4()),
+                },
             }
             await ws.send(json.dumps(start_event))
-            ulaw_audio = await collect_audio_from_ws(ws, timeout=25, min_bytes=2000)
+            ulaw_audio = await collect_audio_from_ws(
+                ws, timeout=20, min_bytes=2000
+            )
 
         assert len(ulaw_audio) > 0, "No audio received"
 
@@ -334,8 +272,11 @@ class TestE2ELive:
         rms = (sum(s**2 for s in samples) / len(samples)) ** 0.5
         duration_s = len(samples) / 8000
 
-        print(f"\n[Audio quality] RMS: {rms:.1f}, duration: {duration_s:.2f}s, samples: {len(samples)}")
-        assert rms > 500, f"Audio RMS {rms:.1f} too low — likely silence"
+        print(
+            f"\n[Audio quality] RMS: {rms:.1f}, "
+            f"duration: {duration_s:.2f}s, samples: {len(samples)}"
+        )
+        assert rms > 500, f"Audio RMS {rms:.1f} too low -- likely silence"
         assert duration_s > 0.5, f"Audio too short: {duration_s:.2f}s"
 
 

@@ -5,23 +5,27 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
+import os
 
 import plivo
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from loguru import logger
 from plivo import plivoxml
 
 from inbound.agent import run_agent
-from utils import (
-    PLIVO_AUTH_ID,
-    PLIVO_AUTH_TOKEN,
-    PLIVO_PHONE_NUMBER,
-    PUBLIC_URL,
-    SERVER_PORT,
-    normalize_phone_number,
-)
+from utils import normalize_phone_number
+
+load_dotenv()
+
+# Server configuration
+SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
+PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
+PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
+PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 
 app = FastAPI(
     title="Gemini-Plivo Voice Agent (Inbound)",
@@ -193,7 +197,8 @@ async def fallback_webhook(request: Request) -> Response:
     response = plivoxml.ResponseElement()
     response.add(
         plivoxml.SpeakElement(
-            "We're sorry, but we're experiencing technical difficulties. Please try again later.",
+            "We're sorry, but we're experiencing technical difficulties. "
+            "Please try again later.",
             voice="Polly.Joanna",
         )
     )
@@ -247,6 +252,7 @@ async def websocket_endpoint(
             call_id=call_id,
             from_number=call_data.get("from", ""),
             to_number=call_data.get("to", ""),
+            stream_id=stream_id or "",
         )
 
     except WebSocketDisconnect:

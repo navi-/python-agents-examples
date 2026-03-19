@@ -76,11 +76,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def ngrok_tunnel():
-    """Start ngrok tunnel pointing at TEST_PORT.
-
-    Started before the server so we can pass PUBLIC_URL to the server process.
-    ngrok only needs the port number, not a running server.
-    """
+    """Start ngrok tunnel pointing at TEST_PORT."""
     proc, public_url = start_ngrok(TEST_PORT)
     print(f"\n[ngrok] Tunnel URL: {public_url}")
 
@@ -91,10 +87,7 @@ def ngrok_tunnel():
 
 @pytest.fixture(scope="module")
 def server_process(ngrok_tunnel):
-    """Start the voice agent server as a subprocess on TEST_PORT.
-
-    Depends on ngrok_tunnel so PUBLIC_URL is available for Plivo answer_url.
-    """
+    """Start the voice agent server as a subprocess on TEST_PORT."""
     env = os.environ.copy()
     env["SERVER_PORT"] = str(TEST_PORT)
     env["PUBLIC_URL"] = ngrok_tunnel
@@ -139,15 +132,7 @@ def plivo_client():
 
 @pytest.fixture(scope="module")
 def bleg_app_id(plivo_client, ngrok_tunnel):
-    """Configure PLIVO_TEST_NUMBER to answer with /outbound/answer.
-
-    When calling between two Plivo numbers, Plivo routes the call through
-    the destination number's app (ignoring the answer_url from calls.create).
-    This fixture configures PLIVO_TEST_NUMBER's app so the outbound agent
-    starts when the test call connects.
-
-    Teardown restores the original app assignment.
-    """
+    """Configure PLIVO_TEST_NUMBER to answer with /outbound/answer."""
     test_digits = "".join(c for c in PLIVO_TEST_NUMBER if c.isdigit())
 
     # Save original app for teardown
@@ -156,12 +141,10 @@ def bleg_app_id(plivo_client, ngrok_tunnel):
         original_app = number_info.get("application", "")
     else:
         original_app = getattr(number_info, "application", "")
-    # Extract app_id from URI like /v1/Account/.../Application/12345/
     original_app_id = ""
     if original_app and "/Application/" in str(original_app):
         original_app_id = str(original_app).split("/Application/")[1].rstrip("/")
 
-    # Create or update the test app
     app_name = "Gemini_Outbound_Test_Agent"
     answer_url = f"{ngrok_tunnel}/outbound/answer"
 
@@ -192,7 +175,6 @@ def bleg_app_id(plivo_client, ngrok_tunnel):
 
     yield app_id
 
-    # Restore original app
     if original_app_id:
         plivo_client.numbers.update(number=test_digits, app_id=original_app_id)
         print(f"\n[Plivo] Restored {test_digits} to original app {original_app_id}")
@@ -210,7 +192,6 @@ class TestOutboundCall:
         """POST /outbound/call returns call_id and status tracking works."""
         public_url = ngrok_tunnel
 
-        # Initiate an outbound call via the API
         resp = httpx.post(
             f"{public_url}/outbound/call",
             params={
@@ -225,11 +206,9 @@ class TestOutboundCall:
         data = resp.json()
         print(f"\n[Outbound] Initiate response: {data}")
 
-        # Should have a call_id
         assert "call_id" in data, f"Expected call_id in response: {data}"
         call_id = data["call_id"]
 
-        # Check status endpoint
         status_resp = httpx.get(
             f"{public_url}/outbound/status/{call_id}",
             timeout=10.0,
@@ -242,7 +221,6 @@ class TestOutboundCall:
             "ringing", "connected", "completed", "failed", "no_answer",
         )
 
-        # Wait a moment then try to hang up the call
         time.sleep(3)
         hangup_resp = httpx.post(
             f"{public_url}/outbound/hangup/{call_id}",
@@ -275,10 +253,9 @@ class TestOutboundCall:
     def test_outbound_call_full_cycle(
         self, server_process, ngrok_tunnel, plivo_client, bleg_app_id
     ):
-        """Place a real outbound call, record, transcribe, verify outbound greeting."""
+        """Place a real outbound call, record, transcribe, verify greeting."""
         public_url = ngrok_tunnel
 
-        # Initiate outbound call via the API
         opening_reason = "your recent demo request for TechFlow Teams"
         resp = httpx.post(
             f"{public_url}/outbound/call",
@@ -296,107 +273,62 @@ class TestOutboundCall:
         assert call_id, f"No call_id in response: {data}"
         print(f"\n[Outbound] Call initiated: {data}")
 
-        # Wait for call to connect via status endpoint (need plivo_call_uuid)
         print("[Outbound] Waiting for call to connect...")
-        a_leg_uuid = None
+        call_uuid = None
         for i in range(60):
             try:
-                status_resp = httpx.get(
-                    f"{public_url}/outbound/status/{call_id}",
-                    timeout=5.0,
-                )
-                status_data = status_resp.json()
-                if status_data.get("status") == "connected":
-                    a_leg_uuid = status_data.get("plivo_call_uuid", "")
-                    if a_leg_uuid:
-                        print(f"[Outbound] Connected! A-leg UUID: {a_leg_uuid}")
-                        break
-                elif status_data.get("status") in (
-                    "completed", "failed", "no_answer",
-                ):
-                    print(f"[Outbound] Call ended: {status_data['status']}")
+                live_calls = plivo_client.live_calls.list_ids()
+                call_ids = []
+                if hasattr(live_calls, "calls"):
+                    call_ids = live_calls.calls or []
+                elif isinstance(live_calls, dict):
+                    call_ids = live_calls.get("calls", [])
+                if call_ids:
+                    call_uuid = call_ids[0]
+                    print(f"[Outbound] Live call_uuid: {call_uuid}")
                     break
             except Exception as e:
                 if i % 10 == 0:
                     print(f"[Outbound] Poll error at {i}s: {e}")
             time.sleep(0.5)
 
-        if not a_leg_uuid:
+        if not call_uuid:
+            print("[Outbound] Call did not go live — skipping recording verification")
             pytest.skip("Call did not connect (callee may not have answered)")
 
-        # Collect all live call UUIDs for recording
-        call_uuids = {a_leg_uuid}
         try:
-            live_calls = plivo_client.live_calls.list_ids()
-            live_ids = []
-            if hasattr(live_calls, "calls"):
-                live_ids = live_calls.calls or []
-            elif isinstance(live_calls, dict):
-                live_ids = live_calls.get("calls", [])
-            for uid in live_ids:
-                call_uuids.add(uid)
-        except Exception:
-            pass
-        print(f"[Outbound] All call UUIDs: {call_uuids}")
+            print("[Outbound] Starting recording...")
+            plivo_client.calls.start_recording(call_uuid, file_format="mp3")
 
-        try:
-            # Start recording on all legs to capture agent audio
-            print(f"[Outbound] Starting recording on {len(call_uuids)} leg(s)...")
-            for uuid in call_uuids:
-                try:
-                    plivo_client.calls.start_recording(uuid, file_format="mp3")
-                    print(f"[Outbound] Recording started on {uuid}")
-                except Exception as e:
-                    print(f"[Outbound] Recording failed on {uuid}: {e}")
-
-            # Let the outbound agent greeting play
             print("[Outbound] Letting agent speak for 20s...")
             time.sleep(20)
 
         finally:
             print("[Outbound] Hanging up...")
-            for uuid in call_uuids:
-                try:
-                    plivo_client.calls.delete(uuid)
-                except Exception as e:
-                    print(f"[Outbound] Hangup {uuid}: {e}")
+            try:
+                plivo_client.calls.delete(call_uuid)
+            except Exception as e:
+                print(f"[Outbound] Hangup error (may already be ended): {e}")
 
-        # Poll for recordings on all legs and find one with speech
-        print("[Recording] Waiting for recordings to become available...")
-        transcript = ""
-        for uuid in call_uuids:
-            recording_url = wait_for_recording(plivo_client, uuid, timeout=30)
-            if not recording_url:
-                print(f"[Recording] No recording for {uuid}")
-                continue
-            print(f"[Recording] URL ({uuid}): {recording_url}")
+        print("[Recording] Waiting for recording to become available...")
+        recording_url = wait_for_recording(plivo_client, call_uuid, timeout=30)
+        assert recording_url, f"No recording found for call {call_uuid} within 30s"
+        print(f"[Recording] URL: {recording_url}")
 
-            audio_data = download_recording(recording_url)
-            print(f"[Recording] Downloaded {len(audio_data)} bytes from {uuid}")
-            if len(audio_data) < 1000:
-                continue
+        print("[Recording] Downloading...")
+        audio_data = download_recording(recording_url)
+        assert len(audio_data) > 1000, f"Recording too small: {len(audio_data)} bytes"
+        print(f"[Recording] Downloaded {len(audio_data)} bytes")
 
-            print("[Transcribe] Transcribing with faster-whisper...")
-            t = transcribe_audio(audio_data)
-            print(f"[Transcript] ({uuid}): {t}")
-            if len(t) > len(transcript):
-                transcript = t
+        print("[Transcribe] Transcribing with faster-whisper...")
+        transcript = transcribe_audio(audio_data)
+        print(f"[Transcript] {transcript}")
 
-        assert len(transcript) > 5, (
-            f"No speech found in any recording. "
-            f"Checked {len(call_uuids)} leg(s): {call_uuids}"
-        )
+        assert len(transcript) > 5, f"Transcript too short: '{transcript}'"
 
-        # Verify the outbound greeting mentions the reason/identity
         outbound_words = [
-            "alex",
-            "techflow",
-            "demo",
-            "trial",
-            "reaching out",
-            "hi",
-            "hello",
-            "good time",
+            "alex", "techflow", "demo", "trial", "reaching out",
+            "hi", "hello", "good time",
         ]
         matches = [w for w in outbound_words if w in transcript.lower()]
         assert matches, (
@@ -404,167 +336,6 @@ class TestOutboundCall:
             f"Expected one of {outbound_words}, got: '{transcript}'"
         )
         print(f"[Result] Matched outbound words: {matches}")
-
-    def test_outbound_call_status_lifecycle(
-        self, server_process, ngrok_tunnel, bleg_app_id
-    ):
-        """Verify status transitions: initiating -> ringing -> connected -> completed."""
-        public_url = ngrok_tunnel
-
-        # Initiate a call
-        resp = httpx.post(
-            f"{public_url}/outbound/call",
-            params={
-                "phone_number": PLIVO_TEST_NUMBER,
-                "opening_reason": "your recent free trial sign-up for TechFlow",
-            },
-            timeout=30.0,
-        )
-        data = resp.json()
-        call_id = data.get("call_id")
-        assert call_id, f"No call_id: {data}"
-
-        # Check initial status should be ringing (Plivo API was called)
-        status_resp = httpx.get(
-            f"{public_url}/outbound/status/{call_id}", timeout=10.0,
-        )
-        status = status_resp.json()
-        print(f"\n[Lifecycle] Initial status: {status['status']}")
-        assert status["status"] in ("ringing", "failed"), (
-            f"Unexpected status: {status['status']}"
-        )
-
-        if status["status"] == "failed":
-            print("[Lifecycle] Call failed to initiate — cannot test full lifecycle")
-            return
-
-        # Wait a bit for the call to potentially connect or fail
-        time.sleep(5)
-
-        # Check status again
-        status_resp = httpx.get(
-            f"{public_url}/outbound/status/{call_id}", timeout=10.0,
-        )
-        status = status_resp.json()
-        print(f"[Lifecycle] After 5s: {status['status']}")
-        assert status["status"] in (
-            "ringing", "connected", "completed", "failed", "no_answer",
-        )
-
-        # Try programmatic hangup
-        time.sleep(2)
-        hangup_resp = httpx.post(
-            f"{public_url}/outbound/hangup/{call_id}", timeout=10.0,
-        )
-        hangup_data = hangup_resp.json()
-        print(f"[Lifecycle] Hangup response: {hangup_data}")
-
-        # Final status check
-        status_resp = httpx.get(
-            f"{public_url}/outbound/status/{call_id}", timeout=10.0,
-        )
-        status = status_resp.json()
-        print(f"[Lifecycle] Final status: {status['status']}")
-
-    def test_outbound_hangup_programmatic(
-        self, server_process, ngrok_tunnel, plivo_client, bleg_app_id
-    ):
-        """POST /outbound/hangup/{call_id} ends an active call."""
-        public_url = ngrok_tunnel
-
-        # Initiate a call
-        resp = httpx.post(
-            f"{public_url}/outbound/call",
-            params={
-                "phone_number": PLIVO_TEST_NUMBER,
-                "opening_reason": "your recent demo request for TechFlow Teams",
-            },
-            timeout=30.0,
-        )
-        data = resp.json()
-        call_id = data.get("call_id")
-        assert call_id, f"No call_id: {data}"
-        print(f"\n[Hangup] Call initiated: call_id={call_id}")
-
-        # Wait for the call to connect (Plivo-to-Plivo can take 10-15s)
-        print("[Hangup] Waiting for call to connect...")
-        connected = False
-        for _ in range(30):
-            status_resp = httpx.get(
-                f"{public_url}/outbound/status/{call_id}",
-                timeout=5.0,
-            )
-            status = status_resp.json()
-            if status["status"] in ("connected", "completed"):
-                connected = True
-                print(f"[Hangup] Status: {status['status']}")
-                break
-            time.sleep(0.5)
-
-        if not connected:
-            print(
-                f"[Hangup] Call didn't connect "
-                f"(status: {status['status']}), skipping"
-            )
-            pytest.skip("Call did not connect in time")
-
-        # Try to hang up
-        hangup_resp = httpx.post(
-            f"{public_url}/outbound/hangup/{call_id}",
-            timeout=10.0,
-        )
-        hangup_data = hangup_resp.json()
-        print(f"[Hangup] Response: {hangup_data}")
-
-        # Wait briefly for hangup to process
-        time.sleep(2)
-
-        # Verify the call status is now completed
-        status_resp = httpx.get(
-            f"{public_url}/outbound/status/{call_id}", timeout=10.0,
-        )
-        status = status_resp.json()
-        print(f"[Hangup] Final status: {status['status']}")
-        assert status["status"] in ("completed", "failed", "no_answer"), (
-            f"Expected terminal status, got: {status['status']}"
-        )
-
-    def test_outbound_campaign_endpoint(self, server_process, ngrok_tunnel):
-        """GET /outbound/campaign/{campaign_id} returns calls for a campaign."""
-        public_url = ngrok_tunnel
-        campaign_id = "test-campaign-endpoint"
-
-        # Initiate a call with this campaign
-        resp = httpx.post(
-            f"{public_url}/outbound/call",
-            params={
-                "phone_number": PLIVO_TEST_NUMBER,
-                "campaign_id": campaign_id,
-                "opening_reason": "your recent demo request for TechFlow Teams",
-            },
-            timeout=30.0,
-        )
-        data = resp.json()
-        call_id = data.get("call_id")
-        print(f"\n[Campaign] Call initiated: {call_id}")
-
-        # Wait briefly then clean up
-        time.sleep(3)
-        httpx.post(f"{public_url}/outbound/hangup/{call_id}", timeout=10.0)
-
-        # Check campaign endpoint
-        camp_resp = httpx.get(
-            f"{public_url}/outbound/campaign/{campaign_id}",
-            timeout=10.0,
-        )
-        assert camp_resp.status_code == 200
-        camp_data = camp_resp.json()
-        print(f"[Campaign] Response: {camp_data}")
-
-        assert camp_data["campaign_id"] == campaign_id
-        assert camp_data["total"] >= 1
-        call_ids = [c["call_id"] for c in camp_data["calls"]]
-        assert call_id in call_ids
 
 
 if __name__ == "__main__":

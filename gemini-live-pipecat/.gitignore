@@ -48,6 +48,9 @@ htmlcov/
 # Ruff
 .ruff_cache/
 
+# ONNX models
+*.onnx
+
 # Logs
 *.log
 logs/

@@ -24,18 +24,23 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from dotenv import load_dotenv
 from loguru import logger
 
 from utils import (
-    GROK_MODEL,
-    GROK_VOICE,
-    XAI_API_KEY,
-    XAI_REALTIME_URL,
     SileroVADProcessor,
     grok_to_plivo,
     plivo_to_grok,
     plivo_to_vad,
 )
+
+load_dotenv()
+
+# Agent configuration
+XAI_API_KEY = os.getenv("XAI_API_KEY", "")
+GROK_MODEL = os.getenv("GROK_MODEL", "grok-3-fast-voice")
+GROK_VOICE = os.getenv("GROK_VOICE", "Sal")
+XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime"
 
 if TYPE_CHECKING:
     from fastapi import WebSocket

@@ -26,6 +26,5 @@ COPY outbound/ outbound/
 # Expose port
 EXPOSE 8000
 
-# Run the server (default: inbound mode)
-# For outbound: CMD ["uv", "run", "python", "-m", "outbound.server"]
+# Run the inbound server by default (override with outbound.server for outbound)
 CMD ["uv", "run", "python", "-m", "inbound.server"]

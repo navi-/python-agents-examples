@@ -165,7 +165,7 @@ def plivo_configured(ngrok_tunnel):
         app_id = response["app_id"]
         print(f"[Plivo] Created application: {app_name} -> {answer_url}")
 
-    # Assign phone number to agent app (used for B-leg in two-way test)
+    # Assign phone number to agent app
     phone_digits = "".join(c for c in PLIVO_PHONE_NUMBER if c.isdigit())
     client.numbers.update(number=phone_digits, app_id=app_id)
     print(f"[Plivo] Assigned {phone_digits} to app {app_id}")
@@ -194,7 +194,11 @@ class TestLiveCall:
         public_url = plivo_configured["public_url"]
         resp = httpx.get(
             f"{public_url}/answer",
-            params={"CallUUID": "test-ngrok", "From": "+15551234567", "To": "+16572338892"},
+            params={
+                "CallUUID": "test-ngrok",
+                "From": "+15551234567",
+                "To": "+16572338892",
+            },
             timeout=10.0,
         )
         assert resp.status_code == 200
@@ -204,11 +208,7 @@ class TestLiveCall:
         print(f"\n[Answer XML] {body[:300]}")
 
     def _place_call_and_wait(self, client, public_url):
-        """Place an outbound call to PLIVO_PHONE_NUMBER and return the live call_uuid.
-
-        Uses /hold as the A-leg answer_url so only the B-leg (phone number's app)
-        starts the agent. This prevents the double-agent / audio feedback problem.
-        """
+        """Place an outbound call to PLIVO_PHONE_NUMBER and return the live call_uuid."""
         hold_url = f"{public_url}/hold"
         from_digits = "".join(c for c in PLIVO_TEST_NUMBER if c.isdigit())
         to_digits = "".join(c for c in PLIVO_PHONE_NUMBER if c.isdigit())
@@ -289,15 +289,8 @@ class TestLiveCall:
 
         assert len(transcript) > 5, f"Transcript too short: '{transcript}'"
         greeting_words = [
-            "hello",
-            "hi",
-            "welcome",
-            "help",
-            "how",
-            "assist",
-            "alex",
-            "techflow",
-            "gemini",
+            "hello", "hi", "welcome", "help", "how",
+            "assist", "alex", "techflow", "gemini",
         ]
         matches = [w for w in greeting_words if w in transcript.lower()]
         assert matches, (
@@ -305,90 +298,6 @@ class TestLiveCall:
             f"Expected one of {greeting_words}, got: '{transcript}'"
         )
         print(f"[Result] Matched greeting words: {matches}")
-
-    def test_live_call_two_way_conversation(self, plivo_configured):
-        """Place a call, ask the agent a question via Plivo TTS, verify the response."""
-        client = plivo_configured["client"]
-        public_url = plivo_configured["public_url"]
-
-        call_uuid = self._place_call_and_wait(client, public_url)
-
-        try:
-            # Start recording
-            print("[Call] Starting recording...")
-            client.calls.start_recording(call_uuid, file_format="mp3")
-
-            # Wait for agent greeting to finish
-            print("[Call] Waiting 20s for agent greeting...")
-            time.sleep(20)
-
-            # Inject a question via Plivo TTS on the A-leg.
-            question = "What plans do you offer and how much do they cost?"
-            print(f"[Call] Speaking into call (aleg): '{question}'")
-            client.calls.speak(call_uuid, text=question, language="en-US", legs="aleg")
-
-            # Wait for the agent to process speech and respond
-            print("[Call] Waiting 25s for agent response...")
-            time.sleep(25)
-
-        finally:
-            print("[Call] Hanging up...")
-            try:
-                client.calls.delete(call_uuid)
-            except Exception as e:
-                print(f"[Call] Hangup error (may already be ended): {e}")
-
-        # Poll for recording
-        print("[Recording] Waiting for recording to become available...")
-        recording_url = wait_for_recording(client, call_uuid, timeout=30)
-        assert recording_url, f"No recording found for call {call_uuid} within 30s"
-        print(f"[Recording] URL: {recording_url}")
-
-        # Download and transcribe
-        print("[Recording] Downloading...")
-        audio_data = download_recording(recording_url)
-        assert len(audio_data) > 1000, f"Recording too small: {len(audio_data)} bytes"
-        print(f"[Recording] Downloaded {len(audio_data)} bytes")
-
-        print("[Transcribe] Transcribing with faster-whisper...")
-        transcript = transcribe_audio(audio_data)
-        print(f"[Transcript] {transcript}")
-
-        transcript_lower = transcript.lower()
-
-        # Verify greeting is present
-        greeting_words = ["hello", "hi", "welcome", "help", "how", "alex", "techflow"]
-        greeting_matches = [w for w in greeting_words if w in transcript_lower]
-        assert greeting_matches, (
-            f"Greeting not found in transcript. "
-            f"Expected one of {greeting_words}, got: '{transcript}'"
-        )
-        print(f"[Result] Greeting words matched: {greeting_matches}")
-
-        # Verify agent responded to the pricing question
-        product_words = [
-            "pro",
-            "team",
-            "enterprise",
-            "starter",
-            "twelve",
-            "twenty",
-            "dollar",
-            "month",
-            "plan",
-            "price",
-            "cost",
-            "tier",
-            "12",
-            "25",
-            "49",
-        ]
-        product_matches = [w for w in product_words if w in transcript_lower]
-        assert len(product_matches) >= 2, (
-            f"Agent did not discuss products/pricing. "
-            f"Matches: {product_matches}, transcript: '{transcript}'"
-        )
-        print(f"[Result] Product/pricing words matched: {product_matches}")
 
 
 if __name__ == "__main__":

@@ -5,24 +5,28 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
+import os
 from datetime import datetime
 
 import plivo
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from loguru import logger
 from plivo import plivoxml
 
 from outbound.agent import CallManager, determine_outcome, run_agent
-from utils import (
-    PLIVO_AUTH_ID,
-    PLIVO_AUTH_TOKEN,
-    PLIVO_PHONE_NUMBER,
-    PUBLIC_URL,
-    SERVER_PORT,
-    normalize_phone_number,
-)
+from utils import normalize_phone_number
+
+load_dotenv()
+
+# Server configuration
+SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
+PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
+PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
+PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 
 app = FastAPI(
     title="Gemini-Plivo Voice Agent (Outbound)",
@@ -58,12 +62,7 @@ async def outbound_initiate(
     objective: str = Query(default=""),
     context: str = Query(default=""),
 ) -> dict:
-    """Initiate an outbound call.
-
-    Creates a call record, then uses the Plivo API to place a call.
-    When the callee answers, Plivo will hit /outbound/answer which starts
-    the voice agent on the A-leg.
-    """
+    """Initiate an outbound call."""
     if not phone_number:
         return {"error": "phone_number is required"}
 
@@ -79,7 +78,9 @@ async def outbound_initiate(
     )
 
     try:
-        client = plivo.RestClient(auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN)
+        client = plivo.RestClient(
+            auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN
+        )
         from_number = normalize_phone_number(PLIVO_PHONE_NUMBER)
         to_number = normalize_phone_number(phone_number)
 
@@ -131,17 +132,10 @@ async def outbound_answer_webhook(
     From: str = Query(default=""),
     To: str = Query(default=""),
 ) -> Response:
-    """Plivo webhook when the callee answers an outbound call.
-
-    Returns <Stream> XML to start WebSocket audio streaming.
-    The /ws endpoint detects this is an outbound call and loads
-    the outbound prompt and initial message from CallManager.
-    """
+    """Plivo webhook when the callee answers an outbound call."""
     call_uuid = CallUUID
     from_number = From
     to_number = To
-
-    request_uuid = ""
 
     if request.method == "POST":
         try:
@@ -150,18 +144,13 @@ async def outbound_answer_webhook(
             call_uuid = call_uuid or str(form_data.get("CallUUID", ""))
             from_number = from_number or str(form_data.get("From", ""))
             to_number = to_number or str(form_data.get("To", ""))
-            request_uuid = str(form_data.get("RequestUUID", ""))
         except Exception:
             pass
 
-    logger.info(f"Outbound call answered: call_id={call_id}, CallUUID={call_uuid}, To={to_number}")
-
-    # Look up call record by call_id (from query string) or by Plivo
-    # RequestUUID (available when Plivo posts webhook data)
-    if not call_id and request_uuid:
-        record = call_manager.get_call_by_request_uuid(request_uuid)
-        if record:
-            call_id = record.call_id
+    logger.info(
+        f"Outbound call answered: call_id={call_id}, "
+        f"CallUUID={call_uuid}, To={to_number}"
+    )
 
     if call_id:
         call_manager.update_status(
@@ -212,9 +201,11 @@ async def outbound_hangup_webhook(request: Request) -> Response:
             f"Duration={duration}s, HangupCause={hangup_cause}"
         )
 
-        # Find and update the call record by plivo_call_uuid
         for record in call_manager.get_active_calls():
-            if record.plivo_call_uuid == call_uuid or record.plivo_request_uuid == call_uuid:
+            if (
+                record.plivo_call_uuid == call_uuid
+                or record.plivo_request_uuid == call_uuid
+            ):
                 outcome = determine_outcome(hangup_cause, duration)
                 call_manager.update_status(
                     record.call_id,
@@ -224,7 +215,9 @@ async def outbound_hangup_webhook(request: Request) -> Response:
                     hangup_cause=hangup_cause,
                     outcome=outcome,
                 )
-                logger.info(f"Outbound call {record.call_id} completed: outcome={outcome}")
+                logger.info(
+                    f"Outbound call {record.call_id} completed: outcome={outcome}"
+                )
                 break
     except Exception as e:
         logger.warning(f"Error parsing outbound hangup webhook: {e}")
@@ -249,10 +242,10 @@ async def outbound_status(call_id: str) -> dict:
         "outcome": record.outcome,
         "duration": record.duration,
         "created_at": record.created_at.isoformat(),
-        "connected_at": record.connected_at.isoformat() if record.connected_at else None,
+        "connected_at": (
+            record.connected_at.isoformat() if record.connected_at else None
+        ),
         "ended_at": record.ended_at.isoformat() if record.ended_at else None,
-        "plivo_call_uuid": record.plivo_call_uuid,
-        "plivo_request_uuid": record.plivo_request_uuid,
     }
 
 
@@ -270,7 +263,9 @@ async def outbound_hangup_call(call_id: str) -> dict:
         return {"error": "No Plivo call UUID — call may not be connected yet"}
 
     try:
-        client = plivo.RestClient(auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN)
+        client = plivo.RestClient(
+            auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN
+        )
         client.calls.delete(record.plivo_call_uuid)
         call_manager.update_status(
             call_id,
@@ -336,14 +331,20 @@ async def websocket_endpoint(
         start_message = json.loads(start_data)
 
         if start_message.get("event") != "start":
-            logger.error(f"Expected start event, got: {start_message.get('event')}")
+            logger.error(
+                f"Expected start event, got: {start_message.get('event')}"
+            )
             await websocket.close()
             return
 
         start_info = start_message.get("start", {})
-        call_id = start_info.get("callId", call_data.get("call_uuid", "unknown"))
+        call_id = start_info.get(
+            "callId", call_data.get("call_uuid", "unknown")
+        )
         stream_id = start_info.get("streamId")
-        logger.info(f"Plivo stream started: callId={call_id}, streamId={stream_id}")
+        logger.info(
+            f"Plivo stream started: callId={call_id}, streamId={stream_id}"
+        )
 
         # Load outbound prompt and initial message from call record
         system_prompt = None
@@ -354,9 +355,13 @@ async def websocket_endpoint(
             if record:
                 system_prompt = record.system_prompt
                 initial_message = record.initial_message
-                logger.info(f"Outbound call detected: call_id={outbound_call_id}")
+                logger.info(
+                    f"Outbound call detected: call_id={outbound_call_id}"
+                )
             else:
-                logger.warning(f"Outbound call record not found: {outbound_call_id}")
+                logger.warning(
+                    f"Outbound call record not found: {outbound_call_id}"
+                )
 
         await run_agent(
             websocket=websocket,
@@ -365,6 +370,7 @@ async def websocket_endpoint(
             to_number=call_data.get("to", ""),
             system_prompt=system_prompt,
             initial_message=initial_message,
+            stream_id=stream_id or "",
         )
 
     except WebSocketDisconnect:
@@ -383,8 +389,12 @@ async def websocket_endpoint(
 
 def main() -> None:
     """Run the outbound server."""
-    logger.info(f"Starting Gemini-Plivo Outbound Voice Agent on port {SERVER_PORT}")
-    uvicorn.run("outbound.server:app", host="0.0.0.0", port=SERVER_PORT, log_level="info")
+    logger.info(
+        f"Starting Gemini-Plivo Outbound Voice Agent on port {SERVER_PORT}"
+    )
+    uvicorn.run(
+        "outbound.server:app", host="0.0.0.0", port=SERVER_PORT, log_level="info"
+    )
 
 
 if __name__ == "__main__":
