@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from openai import AsyncOpenAI
 
-from utils import cartesia_to_plivo, plivo_to_assemblyai
+from utils import cartesia_to_plivo
 
 load_dotenv()
 
@@ -31,7 +31,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
-ASSEMBLYAI_MODEL = os.getenv("ASSEMBLYAI_MODEL", "universal-streaming-english")
+ASSEMBLYAI_MODEL = os.getenv("ASSEMBLYAI_MODEL", "u3-rt-pro")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", "")
 CARTESIA_MODEL = os.getenv("CARTESIA_MODEL", "sonic-3")
 CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID", "6ccbfb76-1fc6-48f7-b71d-91ac6298247b")
@@ -43,8 +43,12 @@ ASSEMBLYAI_WS_URL = "wss://streaming.assemblyai.com/v3/ws"
 # Cartesia WebSocket endpoint
 CARTESIA_WS_URL = "wss://api.cartesia.ai/tts/websocket"
 
-# End-of-turn confidence threshold (lower = faster response, higher = more accurate)
+# Turn detection tuning
+# Note: end_of_turn_confidence_threshold has no effect with u3-rt-pro model
+# (U3 Pro uses punctuation-based turn detection instead)
 END_OF_TURN_CONFIDENCE = float(os.getenv("END_OF_TURN_CONFIDENCE", "0.4"))
+MIN_END_OF_TURN_SILENCE = int(os.getenv("MIN_END_OF_TURN_SILENCE_MS", "160"))
+MAX_TURN_SILENCE = int(os.getenv("MAX_TURN_SILENCE_MS", "2400"))
 
 if TYPE_CHECKING:
     from fastapi import WebSocket
@@ -307,12 +311,16 @@ You can use the caller's phone number for SMS or callbacks without asking."""
         # Initialize conversation history
         self._messages = [{"role": "system", "content": self._build_system_prompt()}]
 
-        # Connect to AssemblyAI
+        # Connect to AssemblyAI — use pcm_mulaw at 8kHz to send Plivo audio directly
+        # (no conversion/resampling needed on the STT path)
         aai_params = urlencode({
-            "sample_rate": "16000",
-            "encoding": "pcm_s16le",
-            "format_turns": "true",
+            "sample_rate": "8000",
+            "encoding": "pcm_mulaw",
+            "speech_model": ASSEMBLYAI_MODEL,
+            "format_turns": "false",
             "end_of_turn_confidence_threshold": str(END_OF_TURN_CONFIDENCE),
+            "min_end_of_turn_silence_when_confident": str(MIN_END_OF_TURN_SILENCE),
+            "max_turn_silence": str(MAX_TURN_SILENCE),
         })
         aai_url = f"{ASSEMBLYAI_WS_URL}?{aai_params}"
         aai_headers = {"Authorization": ASSEMBLYAI_API_KEY}
@@ -393,10 +401,9 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                     payload = message.get("media", {}).get("payload", "")
                     if payload:
                         mulaw_audio = base64.b64decode(payload)
-                        pcm_16k = plivo_to_assemblyai(mulaw_audio)
-                        # AssemblyAI v3 expects raw binary PCM frames
+                        # Send raw μ-law audio directly — AssemblyAI accepts pcm_mulaw at 8kHz
                         if self._assemblyai_ws:
-                            await self._assemblyai_ws.send(pcm_16k)
+                            await self._assemblyai_ws.send(mulaw_audio)
 
                 elif event == "stop":
                     logger.info("Plivo stream stopped")
@@ -432,8 +439,12 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                         logger.info(f"User turn complete: '{transcript}'")
                         await self._generate_response(transcript)
 
-                elif msg_type == "SessionTerminated":
-                    logger.info("AssemblyAI session terminated")
+                elif msg_type == "Termination":
+                    logger.info(
+                        f"AssemblyAI session terminated: "
+                        f"audio={message.get('audio_duration_seconds', 0)}s, "
+                        f"session={message.get('session_duration_seconds', 0)}s"
+                    )
                     break
 
                 elif msg_type == "Error":

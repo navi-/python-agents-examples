@@ -16,10 +16,13 @@ Production-ready voice agent using **GPT-5.4-mini** for conversation, **Assembly
 ## Architecture
 
 ```
-Plivo (μ-law 8kHz) ──→ AssemblyAI STT (PCM16 16kHz) ──→ GPT-5.4-mini (text)
-                                                              │
-Plivo (μ-law 8kHz) ←── Cartesia TTS (PCM16 24kHz) ←─────────┘
+Plivo (μ-law 8kHz) ──→ AssemblyAI STT (μ-law 8kHz direct) ──→ GPT-5.4-mini (text)
+                                                                     │
+Plivo (μ-law 8kHz) ←── Cartesia TTS (PCM16 24kHz) ←─────────────────┘
 ```
+
+Note: AssemblyAI accepts `pcm_mulaw` at 8kHz directly, so Plivo audio is forwarded
+without conversion. Only the TTS → Plivo path requires resampling (24kHz → 8kHz).
 
 ### Interruption Flow
 
@@ -111,7 +114,7 @@ gpt-assemblyai-cartesia-native/
 | Stage | Format | Sample Rate |
 |-------|--------|-------------|
 | Plivo WebSocket | μ-law (base64) | 8 kHz |
-| AssemblyAI input | PCM16 signed LE | 16 kHz |
+| AssemblyAI input | μ-law (binary) | 8 kHz |
 | AssemblyAI output | Text (JSON) | — |
 | GPT input/output | Text | — |
 | Cartesia output | PCM16 signed LE | 24 kHz |
@@ -124,7 +127,7 @@ gpt-assemblyai-cartesia-native/
 | `OPENAI_API_KEY` | OpenAI API key | — |
 | `OPENAI_MODEL` | GPT model ID | `gpt-5.4-mini` |
 | `ASSEMBLYAI_API_KEY` | AssemblyAI API key | — |
-| `ASSEMBLYAI_MODEL` | Streaming model | `universal-streaming-english` |
+| `ASSEMBLYAI_MODEL` | Streaming model | `u3-rt-pro` |
 | `CARTESIA_API_KEY` | Cartesia API key | — |
 | `CARTESIA_MODEL` | TTS model | `sonic-3` |
 | `CARTESIA_VOICE_ID` | Voice ID | `6ccbfb76-...` (Tessa) |
