@@ -1,0 +1,202 @@
+"""
+Integration tests for GPT-5.4-mini AssemblyAI Cartesia LiveKit voice agent.
+
+Test Levels:
+1. Unit Tests - Test individual components (phone normalization)
+2. Local Integration - Test HTTP endpoints without external services
+
+Run tests:
+    uv run pytest tests/test_integration.py -v
+
+Run specific test level:
+    uv run pytest tests/test_integration.py -v -k "unit"
+    uv run pytest tests/test_integration.py -v -k "local"
+"""
+
+from __future__ import annotations
+
+import os
+import signal
+import subprocess
+import sys
+import time
+
+import httpx
+import pytest
+from dotenv import load_dotenv
+
+# Import from utils module
+from utils import normalize_phone_number
+
+load_dotenv()
+
+# Configuration from environment
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
+CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", "")
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
+PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
+PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
+PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "")
+
+TEST_PORT = 18001
+LOCAL_HTTP_URL = f"http://localhost:{TEST_PORT}"
+
+
+# =============================================================================
+# UNIT TESTS - Test individual components
+# =============================================================================
+
+
+class TestUnitPhoneNormalization:
+    """Unit tests for phone number normalization."""
+
+    def test_normalize_e164_format(self):
+        """Test normalizing E.164 formatted numbers."""
+        result = normalize_phone_number("+16572338892")
+        assert result == "16572338892"
+
+    def test_normalize_with_spaces(self):
+        """Test normalizing numbers with spaces."""
+        result = normalize_phone_number("+1 657-233-8892")
+        assert result == "16572338892"
+
+    def test_normalize_local_format(self):
+        """Test normalizing local format numbers."""
+        result = normalize_phone_number("(657) 233-8892", "US")
+        assert result == "16572338892"
+
+    def test_normalize_empty(self):
+        """Test normalizing empty string."""
+        result = normalize_phone_number("")
+        assert result == ""
+
+    def test_normalize_international(self):
+        """Test normalizing international numbers."""
+        result = normalize_phone_number("+442071234567")
+        assert result == "442071234567"
+
+    def test_normalize_digits_only(self):
+        """Test normalizing plain digit strings."""
+        result = normalize_phone_number("16572338892", "US")
+        assert result == "16572338892"
+
+
+# =============================================================================
+# LOCAL INTEGRATION TESTS
+# =============================================================================
+
+
+class TestLocalIntegration:
+    """Integration tests using local HTTP connection."""
+
+    @pytest.fixture(scope="class")
+    def server_process(self):
+        """Start the inbound server as a subprocess."""
+        env = os.environ.copy()
+        env["SERVER_PORT"] = str(TEST_PORT)
+        # Ensure LiveKit worker doesn't start (no credentials in test env)
+        env.pop("LIVEKIT_URL", None)
+        env.pop("LIVEKIT_API_KEY", None)
+        env.pop("LIVEKIT_API_SECRET", None)
+
+        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "inbound.server"],
+            cwd=project_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+
+        ready = False
+        for _ in range(30):
+            try:
+                resp = httpx.get(LOCAL_HTTP_URL, timeout=1.0)
+                if resp.status_code == 200:
+                    ready = True
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+        if not ready:
+            proc.terminate()
+            proc.wait()
+            output = proc.stdout.read().decode() if proc.stdout else ""
+            pytest.skip(f"Server did not start in time. Output:\n{output[:2000]}")
+
+        yield proc
+
+        os.kill(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    @pytest.mark.asyncio
+    async def test_local_health_check(self, server_process):
+        """Test the health check endpoint."""
+        async with httpx.AsyncClient() as client:
+            response = await client.get(LOCAL_HTTP_URL)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "ok"
+            assert data["framework"] == "livekit"
+            assert data["stt"] == "assemblyai"
+            assert data["tts"] == "cartesia"
+
+    @pytest.mark.asyncio
+    async def test_local_answer_webhook(self, server_process):
+        """Test the answer webhook returns valid XML."""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{LOCAL_HTTP_URL}/answer",
+                params={
+                    "CallUUID": "test123",
+                    "From": "+15551234567",
+                    "To": "+16572338892",
+                },
+            )
+            assert response.status_code == 200
+            assert "application/xml" in response.headers["content-type"]
+            # Without LiveKit SIP configured, should return hold/speak response
+            assert "<Speak" in response.text or "<Wait" in response.text
+
+    @pytest.mark.asyncio
+    async def test_local_hangup_webhook(self, server_process):
+        """Test the hangup webhook."""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{LOCAL_HTTP_URL}/hangup",
+                data={
+                    "CallUUID": "test123",
+                    "Duration": "30",
+                    "HangupCause": "NORMAL_CLEARING",
+                },
+            )
+            assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_local_fallback_webhook(self, server_process):
+        """Test the fallback webhook returns valid XML."""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{LOCAL_HTTP_URL}/fallback")
+            assert response.status_code == 200
+            assert "application/xml" in response.headers["content-type"]
+            assert "<Speak" in response.text
+
+    @pytest.mark.asyncio
+    async def test_local_hold_webhook(self, server_process):
+        """Test the hold endpoint returns valid XML."""
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{LOCAL_HTTP_URL}/hold")
+            assert response.status_code == 200
+            assert "application/xml" in response.headers["content-type"]
+            assert "<Wait" in response.text
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "--tb=short"])
