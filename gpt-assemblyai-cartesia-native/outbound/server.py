@@ -6,6 +6,7 @@ import base64
 import contextlib
 import json
 import os
+import sys
 from datetime import datetime
 
 import plivo
@@ -20,6 +21,95 @@ from outbound.agent import CallManager, determine_outcome, run_agent
 from utils import normalize_phone_number
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Loguru sink configuration (env-var driven)
+# ---------------------------------------------------------------------------
+_LOG_FORMAT = os.getenv("LOG_FORMAT", "text").lower()
+_LOG_FILE = os.getenv("LOG_FILE", "")
+
+if _LOG_FORMAT == "json":
+    logger.remove()
+    logger.add(
+        sys.stderr,
+        serialize=True,
+        level="DEBUG",
+    )
+
+if _LOG_FILE:
+    logger.add(
+        _LOG_FILE,
+        serialize=True,
+        rotation="100 MB",
+        retention="7 days",
+        level="DEBUG",
+    )
+
+# ---------------------------------------------------------------------------
+# Redis Streams sink (optional — publishes structured events for real-time UIs)
+# ---------------------------------------------------------------------------
+_REDIS_EVENTS_URL = os.getenv("REDIS_EVENTS_URL", "")
+_REDIS_STREAM_KEY = os.getenv("REDIS_STREAM_KEY", "voice-agent:events")
+
+if _REDIS_EVENTS_URL:
+    try:
+        import redis as _redis_mod
+
+        _redis_client = _redis_mod.Redis.from_url(_REDIS_EVENTS_URL, decode_responses=True)
+        _redis_client.ping()
+
+        def _redis_sink(message):
+            record = message.record
+            fields = {
+                "ts": record["time"].isoformat(),
+                "level": record["level"].name,
+                "msg": str(record["message"]),
+            }
+            for k, v in record["extra"].items():
+                fields[k] = str(v)
+            with contextlib.suppress(Exception):
+                _redis_client.xadd(_REDIS_STREAM_KEY, fields, maxlen=10000, approximate=True)
+
+        logger.add(_redis_sink, level="DEBUG")
+        logger.info("Redis Streams sink enabled — publishing to {}", _REDIS_STREAM_KEY)
+    except ImportError:
+        logger.warning("REDIS_EVENTS_URL set but 'redis' package not installed")
+    except Exception as _redis_err:
+        logger.warning("Redis Streams sink failed to connect: {}", _redis_err)
+
+# ---------------------------------------------------------------------------
+# OTel tracing setup (optional — install with `uv sync --extra observability`)
+# ---------------------------------------------------------------------------
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    provider = TracerProvider()
+    if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        logger.info("OTel tracing enabled — exporting to OTLP endpoint")
+    trace.set_tracer_provider(provider)
+except ImportError:
+    pass
+
+try:
+    from traceloop.sdk import Traceloop
+
+    Traceloop.init(app_name="gpt-assemblyai-cartesia-native")
+    logger.info("OpenLLMetry (Traceloop) auto-instrumentation enabled")
+except ImportError:
+    pass
+
+try:
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+    HTTPXClientInstrumentor().instrument()
+    logger.info("httpx auto-instrumentation enabled")
+except ImportError:
+    pass
 
 # Server configuration
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
@@ -144,7 +234,9 @@ async def outbound_answer_webhook(
         except Exception:
             pass
 
-    logger.info(f"Outbound call answered: call_id={call_id}, CallUUID={call_uuid}, To={to_number}")
+    logger.bind(call_id=call_id).info(
+        f"Outbound call answered: call_id={call_id}, CallUUID={call_uuid}, To={to_number}"
+    )
 
     if call_id:
         call_manager.update_status(
@@ -298,13 +390,14 @@ async def websocket_endpoint(
 ) -> None:
     """WebSocket endpoint for bidirectional audio streaming with Plivo."""
     await websocket.accept()
-    logger.info("WebSocket connection accepted")
 
     call_data = {}
+    call_id = "unknown"
     if body:
         try:
             call_data = json.loads(base64.b64decode(body).decode())
-            logger.info(f"Call metadata: {call_data}")
+            call_id = call_data.get("call_uuid", "unknown")
+            logger.bind(call_id=call_id).info(f"Call metadata: {call_data}")
         except Exception as e:
             logger.warning(f"Failed to decode call metadata: {e}")
 
@@ -313,14 +406,18 @@ async def websocket_endpoint(
         start_message = json.loads(start_data)
 
         if start_message.get("event") != "start":
-            logger.error(f"Expected start event, got: {start_message.get('event')}")
+            logger.bind(call_id=call_id).error(
+                f"Expected start event, got: {start_message.get('event')}"
+            )
             await websocket.close()
             return
 
         start_info = start_message.get("start", {})
         call_id = start_info.get("callId", call_data.get("call_uuid", "unknown"))
         stream_id = start_info.get("streamId")
-        logger.info(f"Plivo stream started: callId={call_id}, streamId={stream_id}")
+        logger.bind(call_id=call_id).info(
+            f"Plivo stream started: callId={call_id}, streamId={stream_id}"
+        )
 
         # Load outbound prompt and initial message from call record
         system_prompt = None
@@ -345,9 +442,9 @@ async def websocket_endpoint(
         )
 
     except WebSocketDisconnect:
-        logger.info("WebSocket disconnected")
+        logger.bind(call_id=call_id).info("WebSocket disconnected")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.bind(call_id=call_id).error(f"WebSocket error: {e}")
     finally:
         with contextlib.suppress(Exception):
             await websocket.close()

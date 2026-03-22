@@ -41,7 +41,7 @@ ASSEMBLYAI_MODEL = os.getenv("ASSEMBLYAI_MODEL", "u3-rt-pro")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", "")
 CARTESIA_MODEL = os.getenv("CARTESIA_MODEL", "sonic-3")
 CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID", "6ccbfb76-1fc6-48f7-b71d-91ac6298247b")
-CARTESIA_API_VERSION = "2025-04-16"
+CARTESIA_API_VERSION = os.getenv("CARTESIA_API_VERSION", "2025-04-16")
 
 ASSEMBLYAI_WS_URL = "wss://streaming.assemblyai.com/v3/ws"
 CARTESIA_WS_URL = "wss://api.cartesia.ai/tts/websocket"

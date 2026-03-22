@@ -35,7 +35,7 @@ ASSEMBLYAI_MODEL = os.getenv("ASSEMBLYAI_MODEL", "u3-rt-pro")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", "")
 CARTESIA_MODEL = os.getenv("CARTESIA_MODEL", "sonic-3")
 CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID", "6ccbfb76-1fc6-48f7-b71d-91ac6298247b")
-CARTESIA_API_VERSION = "2025-04-16"
+CARTESIA_API_VERSION = os.getenv("CARTESIA_API_VERSION", "2025-04-16")
 
 # AssemblyAI streaming endpoint
 ASSEMBLYAI_WS_URL = "wss://streaming.assemblyai.com/v3/ws"
@@ -839,8 +839,15 @@ async def run_agent(
     to_number: str = "",
     system_prompt: str | None = None,
     initial_message: str = "Hello, I'm calling for help.",
+    stream_id: str = "",
+    parent_call_id: str = "",
+    sip_headers: dict | None = None,
 ) -> None:
     """Run a voice agent session for an incoming call."""
+    if parent_call_id:
+        logger.bind(call_id=call_id).info(f"Transfer from parent call: {parent_call_id}")
+    if sip_headers:
+        logger.bind(call_id=call_id).debug(f"SIP headers: {sip_headers}")
     agent = VoiceAgent(
         websocket=websocket,
         call_id=call_id,

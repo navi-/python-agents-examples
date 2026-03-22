@@ -6,6 +6,7 @@ import base64
 import contextlib
 import json
 import os
+import sys
 
 import plivo
 import uvicorn
@@ -19,6 +20,95 @@ from inbound.agent import run_agent
 from utils import normalize_phone_number
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Loguru sink configuration (env-var driven)
+# ---------------------------------------------------------------------------
+_LOG_FORMAT = os.getenv("LOG_FORMAT", "text").lower()
+_LOG_FILE = os.getenv("LOG_FILE", "")
+
+if _LOG_FORMAT == "json":
+    logger.remove()
+    logger.add(
+        sys.stderr,
+        serialize=True,
+        level="DEBUG",
+    )
+
+if _LOG_FILE:
+    logger.add(
+        _LOG_FILE,
+        serialize=True,
+        rotation="100 MB",
+        retention="7 days",
+        level="DEBUG",
+    )
+
+# ---------------------------------------------------------------------------
+# Redis Streams sink (optional — publishes structured events for real-time UIs)
+# ---------------------------------------------------------------------------
+_REDIS_EVENTS_URL = os.getenv("REDIS_EVENTS_URL", "")
+_REDIS_STREAM_KEY = os.getenv("REDIS_STREAM_KEY", "voice-agent:events")
+
+if _REDIS_EVENTS_URL:
+    try:
+        import redis as _redis_mod
+
+        _redis_client = _redis_mod.Redis.from_url(_REDIS_EVENTS_URL, decode_responses=True)
+        _redis_client.ping()
+
+        def _redis_sink(message):
+            record = message.record
+            fields = {
+                "ts": record["time"].isoformat(),
+                "level": record["level"].name,
+                "msg": str(record["message"]),
+            }
+            for k, v in record["extra"].items():
+                fields[k] = str(v)
+            with contextlib.suppress(Exception):
+                _redis_client.xadd(_REDIS_STREAM_KEY, fields, maxlen=10000, approximate=True)
+
+        logger.add(_redis_sink, level="DEBUG")
+        logger.info("Redis Streams sink enabled — publishing to {}", _REDIS_STREAM_KEY)
+    except ImportError:
+        logger.warning("REDIS_EVENTS_URL set but 'redis' package not installed")
+    except Exception as _redis_err:
+        logger.warning("Redis Streams sink failed to connect: {}", _redis_err)
+
+# ---------------------------------------------------------------------------
+# OTel tracing setup (optional — install with `uv sync --extra observability`)
+# ---------------------------------------------------------------------------
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    provider = TracerProvider()
+    if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        logger.info("OTel tracing enabled — exporting to OTLP endpoint")
+    trace.set_tracer_provider(provider)
+except ImportError:
+    pass
+
+try:
+    from traceloop.sdk import Traceloop
+
+    Traceloop.init(app_name="gpt-assemblyai-cartesia-native")
+    logger.info("OpenLLMetry (Traceloop) auto-instrumentation enabled")
+except ImportError:
+    pass
+
+try:
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+    HTTPXClientInstrumentor().instrument()
+    logger.info("httpx auto-instrumentation enabled")
+except ImportError:
+    pass
 
 # Server configuration
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
@@ -140,18 +230,32 @@ async def answer_webhook(
     from_number = From
     to_number = To
 
+    parent_call_uuid = ""
+    sip_headers = {}
     if request.method == "POST":
         try:
             form_data = await request.form()
             call_uuid = call_uuid or str(form_data.get("CallUUID", ""))
             from_number = from_number or str(form_data.get("From", ""))
             to_number = to_number or str(form_data.get("To", ""))
+            parent_call_uuid = str(form_data.get("ParentCallUUID", ""))
+            for key in form_data:
+                if key.startswith("SIP-") or key.startswith("sip-"):
+                    sip_headers[key] = str(form_data.get(key, ""))
         except Exception:
             pass
 
-    logger.info(f"Incoming call: CallUUID={call_uuid}, From={from_number}, To={to_number}")
+    logger.bind(call_id=call_uuid).info(
+        f"Incoming call: CallUUID={call_uuid}, From={from_number}, To={to_number}"
+    )
 
-    body_data = {"call_uuid": call_uuid, "from": from_number, "to": to_number}
+    body_data = {
+        "call_uuid": call_uuid,
+        "from": from_number,
+        "to": to_number,
+        "parent_call_uuid": parent_call_uuid,
+        "sip_headers": sip_headers,
+    }
     body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
 
     # Build WebSocket URL using request host (works with ngrok)
@@ -178,8 +282,9 @@ async def hangup_webhook(request: Request) -> Response:
     """Plivo hangup webhook - called when a call ends."""
     try:
         form_data = await request.form()
-        logger.info(
-            f"Call ended: CallUUID={form_data.get('CallUUID')}, "
+        call_uuid = str(form_data.get("CallUUID", ""))
+        logger.bind(call_id=call_uuid).info(
+            f"Call ended: CallUUID={call_uuid}, "
             f"Duration={form_data.get('Duration')}s, "
             f"HangupCause={form_data.get('HangupCause')}"
         )
@@ -222,13 +327,14 @@ async def websocket_endpoint(
 ) -> None:
     """WebSocket endpoint for bidirectional audio streaming with Plivo."""
     await websocket.accept()
-    logger.info("WebSocket connection accepted")
 
     call_data = {}
+    call_id = "unknown"
     if body:
         try:
             call_data = json.loads(base64.b64decode(body).decode())
-            logger.info(f"Call metadata: {call_data}")
+            call_id = call_data.get("call_uuid", "unknown")
+            logger.bind(call_id=call_id).info(f"Call metadata: {call_data}")
         except Exception as e:
             logger.warning(f"Failed to decode call metadata: {e}")
 
@@ -237,26 +343,33 @@ async def websocket_endpoint(
         start_message = json.loads(start_data)
 
         if start_message.get("event") != "start":
-            logger.error(f"Expected start event, got: {start_message.get('event')}")
+            logger.bind(call_id=call_id).error(
+                f"Expected start event, got: {start_message.get('event')}"
+            )
             await websocket.close()
             return
 
         start_info = start_message.get("start", {})
         call_id = start_info.get("callId", call_data.get("call_uuid", "unknown"))
         stream_id = start_info.get("streamId")
-        logger.info(f"Plivo stream started: callId={call_id}, streamId={stream_id}")
+        logger.bind(call_id=call_id).info(
+            f"Plivo stream started: callId={call_id}, streamId={stream_id}"
+        )
 
         await run_agent(
             websocket=websocket,
             call_id=call_id,
             from_number=call_data.get("from", ""),
             to_number=call_data.get("to", ""),
+            stream_id=stream_id or "",
+            parent_call_id=call_data.get("parent_call_uuid", ""),
+            sip_headers=call_data.get("sip_headers", {}),
         )
 
     except WebSocketDisconnect:
-        logger.info("WebSocket disconnected")
+        logger.bind(call_id=call_id).info("WebSocket disconnected")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.bind(call_id=call_id).error(f"WebSocket error: {e}")
     finally:
         with contextlib.suppress(Exception):
             await websocket.close()
