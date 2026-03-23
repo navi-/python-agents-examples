@@ -1,7 +1,7 @@
-"""Outbound voice agent -- LiveKit pipeline + call state management.
+"""Outbound voice agent -- LiveKit Agent + AgentSession + call state management.
 
-Uses LiveKit VoicePipelineAgent with AssemblyAI STT, OpenAI GPT-5.4-mini LLM,
-and Cartesia TTS. Includes CallManager for tracking outbound call lifecycle.
+Uses LiveKit Agent with AssemblyAI streaming STT, OpenAI GPT-5.4-mini streaming LLM,
+and Cartesia streaming TTS. Includes CallManager for tracking outbound call lifecycle.
 
 Status state machine:
     initiating -> ringing -> connected -> completed
@@ -21,9 +21,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 from livekit import api as livekit_api
-from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions
-from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import assemblyai, cartesia, openai, silero, turn_detector
+from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, JobProcess, WorkerOptions
+from livekit.plugins import assemblyai, cartesia, openai, silero
 from loguru import logger
 
 load_dotenv()
@@ -297,24 +296,22 @@ async def entrypoint(ctx: JobContext) -> None:
     participant = await ctx.wait_for_participant()
     logger.info(f"Outbound participant joined: {participant.identity}")
 
-    from livekit.agents.llm import ChatContext
+    # Create agent with outbound system instructions
+    agent = Agent(instructions=system_prompt)
 
-    chat_ctx = ChatContext()
-    chat_ctx.append(role="system", text=system_prompt)
-
-    agent = VoicePipelineAgent(
-        vad=ctx.proc.userdata["vad"],
+    # Create session with streaming STT, LLM, TTS, and VAD
+    session = AgentSession(
         stt=assemblyai.STT(),
         llm=openai.LLM(model=OPENAI_MODEL),
         tts=cartesia.TTS(voice=CARTESIA_VOICE),
-        turn_detector=turn_detector.EOUModel(),
-        chat_ctx=chat_ctx,
+        vad=ctx.proc.userdata["vad"],
     )
 
-    agent.start(ctx.room, participant)
+    # Start the session in the room
+    session.start(agent=agent, room=ctx.room)
 
     # Send the outbound greeting
-    await agent.say(initial_message, allow_interruptions=True)
+    session.say(initial_message)
 
 
 def create_worker_options() -> WorkerOptions:

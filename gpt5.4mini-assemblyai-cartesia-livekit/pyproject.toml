@@ -10,7 +10,6 @@ dependencies = [
     "livekit-plugins-openai>=0.10.0",
     "livekit-plugins-assemblyai>=0.3.0",
     "livekit-plugins-cartesia>=0.4.0",
-    "livekit-plugins-turn-detector>=0.3.0",
     "livekit-api>=0.7.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",

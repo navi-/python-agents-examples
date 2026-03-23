@@ -1,12 +1,11 @@
 """Voice agent using LiveKit with AssemblyAI STT, OpenAI GPT-5.4-mini, and Cartesia TTS.
 
-This module provides the LiveKit VoicePipelineAgent for inbound calls:
+This module provides the LiveKit Agent for inbound calls:
 - Uses LiveKit Agents framework for orchestration
-- AssemblyAI for real-time speech-to-text
-- OpenAI GPT-5.4-mini for language model
-- Cartesia for text-to-speech
+- AssemblyAI for real-time streaming speech-to-text
+- OpenAI GPT-5.4-mini for streaming language model
+- Cartesia for streaming text-to-speech
 - Silero VAD for voice activity detection
-- LiveKit turn detector for end-of-utterance detection
 
 Usage:
     python -m inbound.server
@@ -18,9 +17,8 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions
-from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import assemblyai, cartesia, openai, silero, turn_detector
+from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, JobProcess, WorkerOptions
+from livekit.plugins import assemblyai, cartesia, openai, silero
 from loguru import logger
 
 load_dotenv()
@@ -54,8 +52,8 @@ async def entrypoint(ctx: JobContext) -> None:
     """LiveKit agent entrypoint for inbound voice calls.
 
     Called by the LiveKit framework when a new participant joins a room
-    (typically via SIP from Plivo). Sets up the VoicePipelineAgent with
-    AssemblyAI STT, OpenAI LLM, and Cartesia TTS.
+    (typically via SIP from Plivo). Creates an Agent with the system prompt
+    and an AgentSession with streaming STT, LLM, and TTS components.
 
     Args:
         ctx: LiveKit job context with room and participant info.
@@ -68,31 +66,22 @@ async def entrypoint(ctx: JobContext) -> None:
     participant = await ctx.wait_for_participant()
     logger.info(f"Participant joined: {participant.identity}")
 
-    agent = VoicePipelineAgent(
-        vad=ctx.proc.userdata["vad"],
+    # Create the agent with system instructions
+    agent = Agent(instructions=SYSTEM_PROMPT)
+
+    # Create session with streaming STT, LLM, TTS, and VAD
+    session = AgentSession(
         stt=assemblyai.STT(),
         llm=openai.LLM(model=OPENAI_MODEL),
         tts=cartesia.TTS(voice=CARTESIA_VOICE),
-        turn_detector=turn_detector.EOUModel(),
-        chat_ctx=_build_chat_context(),
+        vad=ctx.proc.userdata["vad"],
     )
 
-    agent.start(ctx.room, participant)
+    # Start the session in the room
+    session.start(agent=agent, room=ctx.room)
 
     # Send initial greeting
-    await agent.say(
-        "Hello! Thank you for calling. How can I help you today?",
-        allow_interruptions=True,
-    )
-
-
-def _build_chat_context():
-    """Build the initial chat context with the system prompt."""
-    from livekit.agents.llm import ChatContext
-
-    ctx = ChatContext()
-    ctx.append(role="system", text=SYSTEM_PROMPT)
-    return ctx
+    session.say("Hello! Thank you for calling. How can I help you today?")
 
 
 def create_worker_options() -> WorkerOptions:
