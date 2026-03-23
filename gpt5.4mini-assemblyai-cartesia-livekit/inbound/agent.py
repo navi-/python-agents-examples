@@ -6,6 +6,7 @@ This module provides the LiveKit Agent for inbound calls:
 - OpenAI GPT-5.4-mini for streaming language model
 - Cartesia for streaming text-to-speech
 - Silero VAD for voice activity detection
+- EOU (End-of-Utterance) model for accurate turn detection
 
 Usage:
     python -m inbound.server
@@ -19,6 +20,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, JobProcess, WorkerOptions
 from livekit.plugins import assemblyai, cartesia, openai, silero
+from livekit.plugins.turn_detector import english as turn_detector_en
 from loguru import logger
 
 load_dotenv()
@@ -66,8 +68,15 @@ async def entrypoint(ctx: JobContext) -> None:
     participant = await ctx.wait_for_participant()
     logger.info(f"Participant joined: {participant.identity}")
 
-    # Create the agent with system instructions
-    agent = Agent(instructions=SYSTEM_PROMPT)
+    # Create the agent with system instructions and EOU turn detection.
+    # The EOU model uses a small ONNX model that analyzes conversation context
+    # to predict whether the user has finished their turn, reducing false
+    # interruptions during natural pauses (e.g., "I want to... cancel my order").
+    # Silero VAD detects acoustic silence; EOU adds semantic understanding.
+    agent = Agent(
+        instructions=SYSTEM_PROMPT,
+        turn_detection=turn_detector_en.EnglishModel(),
+    )
 
     # Create session with streaming STT, LLM, TTS, and VAD
     session = AgentSession(

@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from livekit import api as livekit_api
 from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, JobProcess, WorkerOptions
 from livekit.plugins import assemblyai, cartesia, openai, silero
+from livekit.plugins.turn_detector import english as turn_detector_en
 from loguru import logger
 
 load_dotenv()
@@ -296,8 +297,11 @@ async def entrypoint(ctx: JobContext) -> None:
     participant = await ctx.wait_for_participant()
     logger.info(f"Outbound participant joined: {participant.identity}")
 
-    # Create agent with outbound system instructions
-    agent = Agent(instructions=system_prompt)
+    # Create agent with outbound system instructions and EOU turn detection
+    agent = Agent(
+        instructions=system_prompt,
+        turn_detection=turn_detector_en.EnglishModel(),
+    )
 
     # Create session with streaming STT, LLM, TTS, and VAD
     session = AgentSession(

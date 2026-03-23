@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "loguru>=0.7.0",
     "phonenumbers>=8.13.0",
+    "livekit-plugins-turn-detector>=1.5.0",
 ]
 
 [dependency-groups]
