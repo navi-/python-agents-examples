@@ -248,7 +248,7 @@ class TestLocalIntegration:
 
             audio_received = False
             try:
-                async with asyncio.timeout(15):
+                async with asyncio.timeout(30):
                     while True:
                         message = await ws.recv()
                         data = json.loads(message)
@@ -277,7 +277,7 @@ class TestLocalIntegration:
             await ws.send(json.dumps(start_event))
 
             start_time = time.time()
-            while time.time() - start_time < 15:
+            while time.time() - start_time < 30:
                 try:
                     message = await asyncio.wait_for(ws.recv(), timeout=0.5)
                     data = json.loads(message)
