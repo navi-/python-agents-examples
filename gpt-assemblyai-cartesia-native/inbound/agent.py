@@ -390,7 +390,17 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                         await task
 
     async def _receive_from_plivo(self) -> None:
-        """Receive audio from Plivo and forward to AssemblyAI for transcription."""
+        """Receive audio from Plivo and forward to AssemblyAI for transcription.
+
+        AssemblyAI requires audio chunks between 50ms and 1000ms. Plivo sends
+        160-byte chunks (20ms at 8kHz μ-law), so we buffer to 100ms (800 bytes)
+        before forwarding.
+        """
+        # Buffer at least 100ms of audio (800 bytes at 8kHz μ-law) to satisfy
+        # AssemblyAI's minimum input duration of 50ms.
+        AAI_MIN_CHUNK = 800  # 100ms at 8kHz μ-law
+        aai_buffer = bytearray()
+
         try:
             while self._running:
                 data = await self.websocket.receive_text()
@@ -401,11 +411,24 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                     payload = message.get("media", {}).get("payload", "")
                     if payload:
                         mulaw_audio = base64.b64decode(payload)
-                        # Send raw μ-law audio directly — AssemblyAI accepts pcm_mulaw at 8kHz
-                        if self._assemblyai_ws:
-                            await self._assemblyai_ws.send(mulaw_audio)
+                        aai_buffer.extend(mulaw_audio)
+                        # Send buffered audio once we have >= 100ms
+                        if len(aai_buffer) >= AAI_MIN_CHUNK and self._assemblyai_ws:
+                            await self._assemblyai_ws.send(bytes(aai_buffer))
+                            aai_buffer.clear()
+
+                elif event == "text":
+                    # Text injection (for testing) — bypass STT, send directly to LLM
+                    text = message.get("text", "").strip()
+                    if text:
+                        logger.info(f"Text event received: '{text}'")
+                        await self._generate_response(text)
 
                 elif event == "stop":
+                    # Flush remaining buffer
+                    if aai_buffer and self._assemblyai_ws:
+                        await self._assemblyai_ws.send(bytes(aai_buffer))
+                        aai_buffer.clear()
                     logger.info("Plivo stream stopped")
                     break
 
@@ -527,7 +550,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                 messages=self._messages,
                 tools=TOOL_DEFINITIONS,
                 stream=True,
-                max_tokens=500,
+                max_completion_tokens=500,
             )
 
             # Accumulate tool call data
@@ -719,7 +742,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                 model=OPENAI_MODEL,
                 messages=self._messages,
                 stream=True,
-                max_tokens=500,
+                max_completion_tokens=500,
             )
 
             text_buffer = ""
