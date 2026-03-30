@@ -22,7 +22,7 @@ Requirements:
     - Port 18002 available
 
 Usage:
-    cd gpt-assemblyai-cartesia-native
+    cd gpt5.4mini-assemblyai-cartesia-native
     uv run pytest tests/test_live_call.py -v -s
 """
 

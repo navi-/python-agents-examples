@@ -98,7 +98,7 @@ except ImportError:
 try:
     from traceloop.sdk import Traceloop
 
-    Traceloop.init(app_name="gpt-assemblyai-cartesia-native")
+    Traceloop.init(app_name="gpt5.4mini-assemblyai-cartesia-native")
     logger.info("OpenLLMetry (Traceloop) auto-instrumentation enabled")
 except ImportError:
     pass

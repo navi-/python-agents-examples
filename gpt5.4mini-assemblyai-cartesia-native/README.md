@@ -51,7 +51,7 @@ When the user speaks while the agent is responding:
 ### 1. Install dependencies
 
 ```bash
-cd gpt-assemblyai-cartesia-native
+cd gpt5.4mini-assemblyai-cartesia-native
 uv sync
 ```
 
@@ -89,7 +89,7 @@ uv run pytest tests/test_integration.py -v -k "unit"
 ## Project Structure
 
 ```
-gpt-assemblyai-cartesia-native/
+gpt5.4mini-assemblyai-cartesia-native/
 ├── inbound/
 │   ├── agent.py              # VoiceAgent: AssemblyAI + GPT + Cartesia pipeline
 │   ├── server.py             # FastAPI: /answer, /ws, /hangup
