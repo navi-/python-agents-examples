@@ -6,7 +6,7 @@ Requirements:
     - ngrok installed
 
 Usage:
-    cd gemini3.1flash-live-native
+    cd gemini3.1-live-native
     uv run pytest tests/test_multiturn_voice.py -v -s
 """
 

@@ -6,7 +6,7 @@ Requirements:
     - PLIVO_TEST_NUMBER
 
 Usage:
-    cd gemini3.1flash-live-native
+    cd gemini3.1-live-native
     uv run pytest tests/test_outbound_call.py -v -s
 """
 

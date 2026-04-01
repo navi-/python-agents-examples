@@ -98,7 +98,7 @@ except ImportError:
 try:
     from traceloop.sdk import Traceloop
 
-    Traceloop.init(app_name="gemini3.1flash-live-native")
+    Traceloop.init(app_name="gemini3.1-live-native")
     logger.info("OpenLLMetry (Traceloop) auto-instrumentation enabled")
 except ImportError:
     pass
@@ -138,7 +138,7 @@ async def health_check() -> dict:
     phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
     return {
         "status": "ok",
-        "service": "gemini3.1flash-live-voice-agent-outbound",
+        "service": "gemini3.1-live-voice-agent-outbound",
         "phone_number": f"+{phone}" if phone else "not configured",
     }
 

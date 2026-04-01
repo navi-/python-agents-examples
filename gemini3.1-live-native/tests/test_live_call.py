@@ -9,7 +9,7 @@ Requirements:
     - ngrok installed and available
 
 Usage:
-    cd gemini3.1flash-live-native
+    cd gemini3.1-live-native
     uv run pytest tests/test_live_call.py -v -s
 """
 
