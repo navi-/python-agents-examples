@@ -1,0 +1,29 @@
+[project]
+name = "voice-agent-generator"
+version = "0.1.0"
+description = "Agentic automation for generating voice agent examples from component combinations"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.52.0",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "click>=8.1",
+    "pydantic>=2.0",
+    "loguru>=0.7.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.0",
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+generate-examples = "voice_agent_generator.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]

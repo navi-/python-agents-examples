@@ -1,0 +1,95 @@
+# Known Models Manifest
+#
+# This file tracks available models from each provider. The trigger detector
+# compares this manifest against the component registry to find new models
+# that need examples generated.
+#
+# To add a new model:
+# 1. Add it here under the appropriate provider/category
+# 2. Run: generate-examples detect --provider <provider> --auto-generate
+# 3. The system will detect the new model and generate all combinations
+#
+# Alternatively, run directly:
+#   generate-examples trigger --type llm --key <new-key>
+#
+# Keys must match registry.py entries. New keys (not in registry) trigger
+# generation after you also add them to registry.py.
+
+openai:
+  llms:
+    - key: gpt4.1mini
+      model_id: gpt-4.1-mini
+    - key: gpt4.1
+      model_id: gpt-4.1
+    - key: gpt5.4mini
+      model_id: gpt-5.4-mini
+    # Uncomment when released:
+    # - key: gpt5
+    #   model_id: gpt-5
+  stts:
+    - key: whisper
+      model_id: whisper-1
+  ttss:
+    - key: openaitts
+      model_id: tts-1
+  voice_native:
+    - key: gpt-realtime
+      model_id: gpt-4o-realtime-preview
+
+anthropic:
+  llms:
+    - key: claude-sonnet
+      model_id: claude-sonnet-4-6
+    - key: claude-haiku
+      model_id: claude-haiku-4-5-20251001
+    # Uncomment when released:
+    # - key: claude-opus
+    #   model_id: claude-opus-4-6
+
+google:
+  llms:
+    - key: gemini
+      model_id: gemini-2.0-flash
+  stts:
+    - key: google-stt
+      model_id: latest_long
+  ttss:
+    - key: google-tts
+      model_id: en-US-Journey-D
+  voice_native:
+    - key: gemini-live
+      model_id: gemini-2.0-flash-live-001
+
+xai:
+  llms:
+    - key: grok
+      model_id: grok-3-fast
+  ttss:
+    - key: groktts
+      model_id: grok-3-fast-voice
+  voice_native:
+    - key: grok-voice
+      model_id: grok-3-fast-voice
+
+deepgram:
+  stts:
+    - key: deepgram
+      model_id: nova-3
+    # Uncomment when released:
+    # - key: deepgram-nova4
+    #   model_id: nova-4
+
+sarvam:
+  stts:
+    - key: sarvam
+      model_id: "saaras:v3"
+
+elevenlabs:
+  ttss:
+    - key: elevenlabs
+      model_id: eleven_flash_v2_5
+
+cartesia:
+  ttss:
+    - key: cartesia
+      model_id: sonic-2
