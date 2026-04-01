@@ -25,6 +25,8 @@ from .evaluator import EvaluationReport, Evaluator, SelfReviewAgent
 from .fixer import Fixer
 from .generator import ExampleGenerator, write_example
 from .planner import ExamplePlan, TriggerEvent, plan_examples
+from .plivo_docs import PlivoDocsGenerator
+from .readme_gen import ReadmeGenerator
 
 MAX_FIX_ITERATIONS = 3
 console = Console()
@@ -80,6 +82,8 @@ class Orchestrator:
         self.max_examples = max_examples
 
         self.generator = ExampleGenerator(repo_root, model=generator_model)
+        self.readme_gen = ReadmeGenerator(repo_root, model=generator_model)
+        self.docs_gen = PlivoDocsGenerator(repo_root, model=generator_model)
         self.evaluator = Evaluator(repo_root)
         self.reviewer = SelfReviewAgent(model=reviewer_model)
         self.fixer = Fixer(repo_root, model=generator_model)
@@ -127,8 +131,23 @@ class Orchestrator:
                 console.print("[yellow]  (dry run — skipping evaluation)")
                 return gen_result
 
+            # Generate README with dedicated generator (higher quality)
+            console.print(f"[cyan]  Generating README...")
+            readme_content = self.readme_gen.generate(plan)
+            files["README.md"] = readme_content
+
             # Write files to disk
             write_example(self.repo_root, plan, files)
+
+            # Generate Plivo docs guide (in .automation/docs/guides/)
+            console.print(f"[cyan]  Generating Plivo docs guide...")
+            try:
+                guide_content = self.docs_gen.generate_guide(plan)
+                guides_dir = self.repo_root / ".automation" / "docs" / "guides"
+                guides_dir.mkdir(parents=True, exist_ok=True)
+                (guides_dir / f"{plan.dir_name}.md").write_text(guide_content)
+            except Exception as e:
+                logger.warning(f"  Plivo docs guide generation failed: {e}")
 
             # Evaluate → Fix loop
             for iteration in range(MAX_FIX_ITERATIONS + 1):

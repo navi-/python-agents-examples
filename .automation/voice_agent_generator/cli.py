@@ -266,5 +266,183 @@ def detect(provider: str, auto_generate: bool, model: str) -> None:
                 git_workflow(repo_root, result.results)
 
 
+@main.group()
+def docs() -> None:
+    """Generate documentation for plivo.com/docs."""
+
+
+@docs.command("guide")
+@click.option("--example", required=True, help="Example directory name")
+@click.option("--model", default="claude-sonnet-4-6", help="Claude model")
+def docs_guide(example: str, model: str) -> None:
+    """Generate a Plivo docs guide for a specific example."""
+    from .plivo_docs import PlivoDocsGenerator
+
+    repo_root = _find_repo_root()
+    gen = PlivoDocsGenerator(repo_root, model=model)
+
+    # Build a minimal plan from the example directory
+    plan = _plan_from_existing(example, repo_root)
+    if not plan:
+        console.print(f"[red]Cannot build plan for {example}")
+        return
+
+    content = gen.generate_guide(plan)
+    output_dir = repo_root / ".automation" / "docs" / "guides"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{example}.md"
+    output_path.write_text(content)
+    console.print(f"[green]Wrote guide: {output_path}")
+
+
+@docs.command("reference")
+@click.option("--type", "component_type", required=True,
+              type=click.Choice(["stt", "llm", "tts", "voice_native"]),
+              help="Component type to generate reference for")
+@click.option("--model", default="claude-sonnet-4-6", help="Claude model")
+def docs_reference(component_type: str, model: str) -> None:
+    """Generate a Plivo docs reference page for a component type."""
+    from .plivo_docs import PlivoDocsGenerator
+
+    repo_root = _find_repo_root()
+    gen = PlivoDocsGenerator(repo_root, model=model)
+
+    content = gen.generate_reference(component_type)
+    output_dir = repo_root / ".automation" / "docs" / "reference"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{component_type}-providers.md"
+    output_path.write_text(content)
+    console.print(f"[green]Wrote reference: {output_path}")
+
+
+@docs.command("concepts")
+@click.option("--topic", default=None, help="Specific topic (or all if omitted)")
+@click.option("--model", default="claude-sonnet-4-6", help="Claude model")
+def docs_concepts(topic: str | None, model: str) -> None:
+    """Generate Plivo docs concept pages."""
+    from .plivo_docs import CONCEPT_TOPICS, PlivoDocsGenerator
+
+    repo_root = _find_repo_root()
+    gen = PlivoDocsGenerator(repo_root, model=model)
+
+    if topic:
+        if topic not in CONCEPT_TOPICS:
+            console.print(f"[red]Unknown topic: {topic}")
+            console.print(f"Available: {', '.join(CONCEPT_TOPICS.keys())}")
+            return
+        content = gen.generate_concept(topic)
+        output_dir = repo_root / ".automation" / "docs" / "concepts"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{topic}.md"
+        output_path.write_text(content)
+        console.print(f"[green]Wrote concept: {output_path}")
+    else:
+        concepts = gen.generate_all_concepts()
+        output_dir = repo_root / ".automation" / "docs" / "concepts"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for t, content in concepts.items():
+            (output_dir / f"{t}.md").write_text(content)
+            console.print(f"[green]Wrote concept: {t}.md")
+
+
+@docs.command("all")
+@click.option("--model", default="claude-sonnet-4-6", help="Claude model")
+def docs_all(model: str) -> None:
+    """Generate all Plivo docs (guides for existing examples + references + concepts)."""
+    from .plivo_docs import PlivoDocsGenerator
+
+    repo_root = _find_repo_root()
+    gen = PlivoDocsGenerator(repo_root, model=model)
+
+    console.rule("[bold]Generating Plivo docs")
+
+    # Concepts
+    console.print("[cyan]Generating concept pages...")
+    concepts = gen.generate_all_concepts()
+
+    # References
+    console.print("[cyan]Generating reference pages...")
+    references = gen.generate_all_references()
+
+    # Guides for all existing examples
+    console.print("[cyan]Generating guides for existing examples...")
+    guides = {}
+    existing_dirs = sorted(
+        d.name for d in repo_root.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+        and d.name not in ("scripts", "__pycache__")
+        and (d / "inbound" / "agent.py").exists()
+    )
+
+    for example in existing_dirs:
+        plan = _plan_from_existing(example, repo_root)
+        if plan:
+            content = gen.generate_guide(plan)
+            guides[example] = content
+            console.print(f"  [green]Guide: {example}")
+
+    # Write everything
+    gen.write_docs(guides=guides, references=references, concepts=concepts)
+    console.print(f"\n[bold green]Generated {len(concepts)} concepts, "
+                  f"{len(references)} references, {len(guides)} guides")
+    console.print(f"Output: {gen.docs_dir}")
+
+
+def _plan_from_existing(example_name: str, repo_root: Path) -> ExamplePlan | None:
+    """Build a minimal ExamplePlan from an existing example directory.
+
+    Infers components from the directory name and registry.
+    """
+    from .planner import ExamplePlan
+
+    # Parse the directory name to identify components
+    parts = example_name.split("-")
+
+    # Check if it's a voice-native example
+    for vn_key, vn in VOICE_NATIVE.items():
+        if example_name.startswith(vn.short_name):
+            orch_name = parts[-1] if parts[-1] in ORCHESTRATIONS else "native"
+            orch = ORCHESTRATIONS.get(orch_name, ORCHESTRATIONS["native"])
+            return ExamplePlan(
+                dir_name=example_name,
+                voice_native=vn,
+                orchestration=orch,
+            )
+
+    # Try to match LLM, STT, TTS from registry
+    orch_name = parts[-1] if parts[-1] in ORCHESTRATIONS else "native"
+    orch = ORCHESTRATIONS.get(orch_name, ORCHESTRATIONS["native"])
+
+    matched_llm = None
+    matched_stt = None
+    matched_tts = None
+
+    for key, llm in LLMS.items():
+        if llm.short_name in example_name:
+            matched_llm = llm
+            break
+
+    for key, stt in STTS.items():
+        if stt.short_name in example_name:
+            matched_stt = stt
+            break
+
+    for key, tts in TTSS.items():
+        if tts.short_name in example_name:
+            matched_tts = tts
+            break
+
+    if matched_llm or matched_stt or matched_tts:
+        return ExamplePlan(
+            dir_name=example_name,
+            llm=matched_llm,
+            stt=matched_stt,
+            tts=matched_tts,
+            orchestration=orch,
+        )
+
+    return None
+
+
 if __name__ == "__main__":
     main()

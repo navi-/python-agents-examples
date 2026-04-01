@@ -29,7 +29,7 @@ GENERATION_ORDER = [
     ".gitignore",
     ".pre-commit-config.yaml",
     "Dockerfile",
-    "README.md",
+    # README.md is generated separately by ReadmeGenerator for higher quality
     "tests/conftest.py",
     "tests/helpers.py",
     "tests/test_integration.py",

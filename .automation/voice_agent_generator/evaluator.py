@@ -102,7 +102,10 @@ class Evaluator:
         # 6. Unit tests (if venv exists)
         report.results.extend(self._check_unit_tests(example_dir))
 
-        # 7. Validate script (uses the repo's own validator)
+        # 7. README quality checks
+        report.results.extend(self._check_readme(example_dir, plan))
+
+        # 8. Validate script (uses the repo's own validator)
         report.results.extend(self._run_validate_script(plan.dir_name))
 
         logger.info(report.summary())
@@ -317,6 +320,139 @@ class Evaluator:
                 message="Could not run unit tests",
                 fixable=False,
             )]
+
+    def _check_readme(
+        self, example_dir: Path, plan: ExamplePlan
+    ) -> list[EvalResult]:
+        """Check README quality: demo description, required sections, content rules."""
+        results = []
+        readme_path = example_dir / "README.md"
+
+        if not readme_path.exists():
+            results.append(EvalResult(
+                name="readme_exists", passed=False,
+                message="README.md not found",
+            ))
+            return results
+
+        content = readme_path.read_text()
+        lines = content.split("\n")
+
+        # 1. Check H1 exists
+        h1_line = None
+        for i, line in enumerate(lines):
+            if line.startswith("# ") and not line.startswith("##"):
+                h1_line = i
+                break
+
+        if h1_line is None:
+            results.append(EvalResult(
+                name="readme_h1", passed=False,
+                message="README has no H1 heading",
+            ))
+            return results
+
+        # 2. Find first H2
+        first_h2 = None
+        for i, line in enumerate(lines[h1_line + 1:], start=h1_line + 1):
+            if line.startswith("## "):
+                first_h2 = i
+                break
+
+        if first_h2 is None:
+            results.append(EvalResult(
+                name="readme_structure", passed=False,
+                message="README has no H2 sections",
+            ))
+            return results
+
+        # 3. Demo description: lines between H1 and first H2
+        demo_lines = [l for l in lines[h1_line + 1:first_h2] if l.strip()]
+        if len(demo_lines) > 5:
+            results.append(EvalResult(
+                name="readme_demo_length", passed=False,
+                message=f"Demo description has {len(demo_lines)} lines (max 5)",
+            ))
+        else:
+            results.append(EvalResult(name="readme_demo_length", passed=True))
+
+        # 4. No code blocks or tables in demo description
+        demo_text = "\n".join(lines[h1_line + 1:first_h2])
+        has_code_block = "```" in demo_text
+        has_table = "|" in demo_text and "---" in demo_text
+        has_image = "![" in demo_text
+
+        if has_code_block or has_table or has_image:
+            bad = []
+            if has_code_block:
+                bad.append("code blocks")
+            if has_table:
+                bad.append("tables")
+            if has_image:
+                bad.append("images")
+            results.append(EvalResult(
+                name="readme_demo_format", passed=False,
+                message=f"Demo description contains {', '.join(bad)} "
+                        f"(only plain text and bullet lists allowed)",
+            ))
+        else:
+            results.append(EvalResult(name="readme_demo_format", passed=True))
+
+        # 5. Check required H2 sections (at least 5 of 7)
+        required_sections = [
+            "Features", "Prerequisites", "Quick Start", "Project Structure",
+            "How It Works", "Configuration", "Testing",
+        ]
+        found_sections = []
+        for section in required_sections:
+            for line in lines:
+                if line.startswith("## ") and section.lower() in line.lower():
+                    found_sections.append(section)
+                    break
+
+        # Also accept "Get Started" as alias for "Quick Start",
+        # "Architecture" for "How It Works", "Deploying"/"Deployment" etc.
+        aliases = {
+            "Quick Start": ["Get Started", "Setup", "Getting Started"],
+            "How It Works": ["Architecture", "Pipeline", "Audio Pipeline"],
+            "Project Structure": ["File Structure", "Structure"],
+            "Configuration": ["Config", "Environment Variables"],
+        }
+        for canonical, alts in aliases.items():
+            if canonical not in found_sections:
+                for alt in alts:
+                    for line in lines:
+                        if line.startswith("## ") and alt.lower() in line.lower():
+                            found_sections.append(canonical)
+                            break
+                    if canonical in found_sections:
+                        break
+
+        unique_found = list(dict.fromkeys(found_sections))
+        if len(unique_found) >= 5:
+            results.append(EvalResult(
+                name="readme_sections",
+                passed=True,
+                message=f"Found {len(unique_found)}/7 required sections",
+            ))
+        else:
+            missing = [s for s in required_sections if s not in unique_found]
+            results.append(EvalResult(
+                name="readme_sections", passed=False,
+                message=f"Only {len(unique_found)}/7 sections found. "
+                        f"Missing: {', '.join(missing)}",
+            ))
+
+        # 6. Minimum content length (a real README should be >2000 chars)
+        if len(content) < 2000:
+            results.append(EvalResult(
+                name="readme_length", passed=False,
+                message=f"README is only {len(content)} chars (minimum 2000 for a real README)",
+            ))
+        else:
+            results.append(EvalResult(name="readme_length", passed=True))
+
+        return results
 
     def _run_validate_script(self, example_name: str) -> list[EvalResult]:
         """Run the repo's own validate-example.sh script."""

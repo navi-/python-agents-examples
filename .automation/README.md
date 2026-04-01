@@ -1,6 +1,6 @@
 # Voice Agent Example Generator
 
-Agentic automation that generates production-ready voice agent examples when new AI models release. Uses a **Planner → Generator → Evaluator → Fixer** loop powered by Claude API.
+Agentic automation that generates production-ready voice agent examples when new AI models release. Uses a **Planner → Generator → Evaluator → Fixer** loop powered by Claude API. Also generates READMEs and Plivo.com/docs documentation.
 
 ## Architecture
 
@@ -15,33 +15,99 @@ Agentic automation that generates production-ready voice agent examples when new
                                                │    │ (Claude) │  (if failures)
                                                │    └──────────┘
                                                ▼
+                                    ┌──────────────────────┐
+                                    │  README + Plivo Docs │
+                                    │  Generation          │
+                                    └──────────┬───────────┘
+                                               ▼
                                         ┌─────────────┐
                                         │ Git Workflow │
                                         │ branch/push  │
                                         └─────────────┘
 ```
 
-### Components
+### Pipeline Components
 
-1. **Trigger Detection** (`triggers.py`): Compares `known-models.yaml` manifest against the component registry. New models not yet in the registry trigger generation.
+1. **Trigger Detection** (`triggers.py`): Compares `known-models.yaml` manifest against the component registry. New models trigger generation.
 
-2. **Planner** (`planner.py`): Computes all valid `{LLM × STT × TTS × Orchestration}` combinations for the triggered component, skipping already-existing example directories.
+2. **Planner** (`planner.py`): Computes all valid `{LLM × STT × TTS × Orchestration}` combinations, skipping existing directories.
 
-3. **Generator** (`generator.py`): Uses Claude API to produce each file for an example, using existing examples as references. Generates files in dependency order (utils.py → agent.py → server.py → tests → config).
+3. **Generator** (`generator.py`): Claude API produces each code file using existing examples as references. Files generated in dependency order.
 
-4. **Evaluator** (`evaluator.py`): Multi-stage validation:
-   - Structure: all 24 canonical files exist
+4. **README Generator** (`readme_gen.py`): Dedicated Claude-powered README generator. Produces first-principles structured READMEs with demo description (≤5 lines text only), architecture diagrams, audio pipeline tables, VAD tuning, and troubleshooting.
+
+5. **Evaluator** (`evaluator.py`): Multi-stage validation:
+   - Structure: all canonical files exist
    - Code quality: `__future__` annotations, loguru, no hardcoded keys
    - Config placement: server config in server.py, audio config in utils.py
    - Audio pipeline: PLIVO_CHUNK_SIZE=160, μ-law content types
+   - README quality: demo length ≤5 lines, no diagrams in demo, ≥5 required sections
    - Lint: ruff passes
    - Unit tests: offline tests pass
-   - Self-review: Claude reviews generated code for logical correctness
-   - Validation script: `scripts/validate-example.sh` passes
+   - Self-review: Claude checks for logical correctness
+   - Validation script: `scripts/validate-example.sh`
 
-5. **Fixer** (`fixer.py`): Takes evaluation failures, infers which files are affected, and uses Claude to produce corrected versions. Re-evaluated after fixing.
+6. **Fixer** (`fixer.py`): Takes evaluation failures and uses Claude to produce corrected files. Loop repeats up to 3 times.
 
-6. **Orchestrator** (`orchestrator.py`): Runs the full loop up to 3 fix iterations per example.
+7. **Plivo Docs Generator** (`plivo_docs.py`): Produces documentation for plivo.com/docs in three content types (see below).
+
+8. **Orchestrator** (`orchestrator.py`): Runs the full pipeline. Each example gets code + README + Plivo docs guide.
+
+## Documentation for plivo.com/docs
+
+The docs generator produces three content types:
+
+### Guides (`docs/guides/`)
+Per-stack tutorials. One guide per example directory. Step-by-step: prerequisites → setup → build the agent → test → deploy.
+
+```bash
+# Generate a guide for a specific example
+uv run generate-examples docs guide --example gpt4.1mini-deepgram-elevenlabs-native
+
+# Generate guides for ALL existing examples
+uv run generate-examples docs all
+```
+
+### Reference (`docs/reference/`)
+Per-component-type pages. ONE page covers all providers for that role.
+
+- `stt-providers.md` — Deepgram, Sarvam, Whisper, Google Cloud STT
+- `llm-providers.md` — OpenAI, Anthropic, Google, xAI
+- `tts-providers.md` — ElevenLabs, Cartesia, Grok TTS, OpenAI TTS
+- `voice_native-providers.md` — Grok Voice, GPT Realtime, Gemini Live
+
+When a new model releases, you update ONE reference page — not create a new doc.
+
+```bash
+# Generate a single reference page
+uv run generate-examples docs reference --type stt
+
+# Generate all reference pages
+uv run generate-examples docs all
+```
+
+### Concepts (`docs/concepts/`)
+Architecture and decision pages. Universal patterns that don't change per model.
+
+- `voice-agent-architecture.md` — Plivo WebSocket protocol, pipeline patterns
+- `audio-pipeline.md` — μ-law/PCM conversion, resampling, chunking
+- `vad-turn-detection.md` — Silero VAD config, echo rejection, barge-in
+- `choosing-your-stack.md` — Provider comparison, trade-offs, compatibility
+
+```bash
+# Generate a specific concept page
+uv run generate-examples docs concepts --topic audio-pipeline
+
+# Generate all concept pages
+uv run generate-examples docs all
+```
+
+### Why this structure (not per-model-series)
+
+- **Users search by task** ("Plivo Deepgram STT voice agent") not by model version
+- **No duplication**: GPT-4.1 vs GPT-5.4 docs would be 90% identical
+- **New model releases** update a reference page, not fragment the docs
+- **LLM-SEO**: "Plivo voice agent Deepgram STT" is a better search target than "Plivo GPT-4.1-mini voice agent"
 
 ## Quick Start
 
@@ -49,43 +115,31 @@ Agentic automation that generates production-ready voice agent examples when new
 cd .automation
 uv sync
 
-# Set your Anthropic API key
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # List all registered components
 uv run generate-examples list-components
 
-# Plan what would be generated for a new LLM (dry run)
+# Plan (dry run)
 uv run generate-examples trigger --type llm --key gpt5.4mini --dry-run
 
-# Generate all STT×TTS combinations for a new LLM
+# Generate examples + READMEs + Plivo docs guides
 uv run generate-examples trigger --type llm --key gpt5.4mini
 
-# Generate all LLM×TTS combinations for a new STT (e.g., Deepgram Nova 4)
-# First add the new STT to registry.py, then:
-uv run generate-examples trigger --type stt --key deepgram-nova4
+# Generate ALL Plivo docs (guides + references + concepts)
+uv run generate-examples docs all
 
-# Generate a single voice-native example
-uv run generate-examples trigger --type voice_native --key grok-voice
-
-# Detect new models from a provider
-uv run generate-examples detect --provider openai
-
-# Detect and auto-generate
+# Detect new models and auto-generate
 uv run generate-examples detect --provider openai --auto-generate
-
-# Limit number of examples (useful for testing)
-uv run generate-examples trigger --type llm --key gpt5.4mini --max-examples 2
 ```
 
 ## Adding a New Provider/Model
 
 ### Step 1: Add to Registry
 
-Edit `voice_agent_generator/registry.py` and add the new component:
+Edit `voice_agent_generator/registry.py`:
 
 ```python
-# In LLMS dict:
 "newmodel": LLMComponent(
     name="New Model",
     short_name="newmodel",
@@ -115,9 +169,15 @@ provider:
 uv run generate-examples trigger --type llm --key newmodel
 ```
 
-## Combination Math
+This generates: code examples + READMEs + Plivo docs guides.
 
-When triggered by a new component, the planner generates cross-products:
+Then regenerate the reference pages to include the new provider:
+
+```bash
+uv run generate-examples docs reference --type llm
+```
+
+## Combination Math
 
 | Trigger Type | Combinations Generated |
 |---|---|
@@ -135,16 +195,21 @@ Use `--max-examples N` to limit batch size.
 ├── pyproject.toml                    # Package definition
 ├── known-models.yaml                 # Model manifest for trigger detection
 ├── README.md                         # This file
+├── docs/                             # Generated Plivo docs output
+│   ├── sidebar.json                  # Navigation config
+│   ├── concepts/                     # Architecture pages
+│   ├── reference/                    # Per-component-type pages
+│   └── guides/                       # Per-example tutorials
 └── voice_agent_generator/
     ├── __init__.py
     ├── cli.py                        # Click CLI entry point
     ├── registry.py                   # Component definitions (LLMs, STTs, TTSs)
     ├── planner.py                    # Combination generator
     ├── generator.py                  # Claude-powered code generator
-    ├── evaluator.py                  # Multi-stage validator
+    ├── readme_gen.py                 # First-principles README generator
+    ├── plivo_docs.py                 # Plivo.com/docs generator (guides + reference + concepts)
+    ├── evaluator.py                  # Multi-stage validator (incl. README quality)
     ├── fixer.py                      # Auto-fix from eval feedback
     ├── orchestrator.py               # Full pipeline loop
     └── triggers.py                   # New model detection
 ```
-
-The `.automation/` directory is a dotfile — invisible by default, clearly separate from the voice agent examples in the repo root.
