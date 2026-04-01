@@ -75,8 +75,8 @@ Variants:
 ├── utils.py                  # Audio conversion, VAD (if native), phone utils
 ├── tests/
 │   ├── __init__.py
-│   ├── conftest.py           # sys.path setup (copy from grok-voice-native)
-│   ├── helpers.py            # ngrok, recording, transcription (copy from grok-voice-native)
+│   ├── conftest.py           # sys.path setup (copy from grok3-voice-native)
+│   ├── helpers.py            # ngrok, recording, transcription (copy from grok3-voice-native)
 │   ├── test_integration.py   # Unit + local integration tests
 │   ├── test_e2e_live.py      # E2E with real API (no phone call)
 │   ├── test_live_call.py     # Real inbound call test
@@ -123,7 +123,7 @@ Required functions:
 
 For native examples, also:
 - `plivo_to_vad(mulaw_8k: bytes) -> np.ndarray` — float32 16kHz for Silero
-- `SileroVADProcessor` class (reference: `grok-voice-native/utils.py`)
+- `SileroVADProcessor` class (reference: `grok3-voice-native/utils.py`)
 
 For framework examples: no VAD in utils (framework handles it).
 
@@ -133,7 +133,7 @@ For framework examples: no VAD in utils (framework handles it).
 - VAD runs in `plivo_rx` task alongside audio forwarding
 - Speech start during AI response triggers barge-in (`response.cancel` or equivalent)
 - Speech end triggers turn commit (`input_audio_buffer.commit` + `response.create` or equivalent)
-- Reference: `grok-voice-native/utils.py` (SileroVADProcessor), `grok-voice-native/inbound/agent.py` (integration)
+- Reference: `grok3-voice-native/utils.py` (SileroVADProcessor), `grok3-voice-native/inbound/agent.py` (integration)
 
 **Framework examples** (Pipecat/LiveKit): use `vad_enabled=True` in transport params. No separate Silero.
 
