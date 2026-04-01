@@ -296,21 +296,20 @@ def docs_guide(example: str, model: str) -> None:
 
 
 @docs.command("reference")
-@click.option("--type", "component_type", required=True,
-              type=click.Choice(["stt", "llm", "tts", "voice_native"]),
-              help="Component type to generate reference for")
+@click.option("--provider", required=True,
+              help="Provider to generate reference for (e.g., openai, deepgram, elevenlabs)")
 @click.option("--model", default="claude-sonnet-4-6", help="Claude model")
-def docs_reference(component_type: str, model: str) -> None:
-    """Generate a Plivo docs reference page for a component type."""
+def docs_reference(provider: str, model: str) -> None:
+    """Generate a Plivo docs reference page for a provider."""
     from .plivo_docs import PlivoDocsGenerator
 
     repo_root = _find_repo_root()
     gen = PlivoDocsGenerator(repo_root, model=model)
 
-    content = gen.generate_reference(component_type)
+    content = gen.generate_provider_reference(provider)
     output_dir = repo_root / ".automation" / "docs" / "reference"
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{component_type}-providers.md"
+    output_path = output_dir / f"{provider}.md"
     output_path.write_text(content)
     console.print(f"[green]Wrote reference: {output_path}")
 

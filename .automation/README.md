@@ -69,18 +69,22 @@ uv run generate-examples docs all
 ```
 
 ### Reference (`docs/reference/`)
-Per-component-type pages. ONE page covers all providers for that role.
+**One page per provider.** Each page covers ALL roles that provider serves (LLM, STT, TTS, S2S), organized by API surface with versioned integration sections.
 
-- `stt-providers.md` — Deepgram, Sarvam, Whisper, Google Cloud STT
-- `llm-providers.md` — OpenAI, Anthropic, Google, xAI
-- `tts-providers.md` — ElevenLabs, Cartesia, Grok TTS, OpenAI TTS
-- `voice_native-providers.md` — Grok Voice, GPT Realtime, Gemini Live
+- `openai.md` — Chat Completions (GPT-4.1, GPT-5.4), Whisper STT, OpenAI TTS, GPT Realtime S2S
+- `anthropic.md` — Messages API (Claude Sonnet, Claude Haiku)
+- `google.md` — Gemini HTTP LLM, Google Cloud STT, Google Cloud TTS, Gemini Live S2S
+- `xai.md` — Grok LLM, Grok TTS, Grok Voice S2S
+- `deepgram.md` — Deepgram STT (Nova 2, Nova 3)
+- `sarvam.md` — Sarvam STT
+- `elevenlabs.md` — ElevenLabs TTS (WebSocket streaming, HTTP)
+- `cartesia.md` — Cartesia TTS
 
-When a new model releases, you update ONE reference page — not create a new doc.
+When models share the same API surface (same code, different `model_id`), they appear in one table. When models require different integration code (e.g., `max_tokens` → `max_completion_tokens`), they get separate sections with separate code snippets.
 
 ```bash
-# Generate a single reference page
-uv run generate-examples docs reference --type stt
+# Generate a single provider reference page
+uv run generate-examples docs reference --provider openai
 
 # Generate all reference pages
 uv run generate-examples docs all
@@ -102,12 +106,13 @@ uv run generate-examples docs concepts --topic audio-pipeline
 uv run generate-examples docs all
 ```
 
-### Why this structure (not per-model-series)
+### Why per-provider (not per-model-series or per-component-type)
 
-- **Users search by task** ("Plivo Deepgram STT voice agent") not by model version
-- **No duplication**: GPT-4.1 vs GPT-5.4 docs would be 90% identical
-- **New model releases** update a reference page, not fragment the docs
-- **LLM-SEO**: "Plivo voice agent Deepgram STT" is a better search target than "Plivo GPT-4.1-mini voice agent"
+- **Users search by provider** ("Plivo OpenAI voice agent", "Plivo Deepgram integration")
+- **All API surfaces in one place**: OpenAI page covers Chat, Whisper, TTS, and Realtime
+- **Breaking changes documented inline**: GPT-4.1 (`max_tokens`) vs GPT-5.4 (`max_completion_tokens`) in the same page
+- **New model releases** update ONE provider page — not fragment the docs
+- **LLM-SEO**: "Plivo voice agent OpenAI integration" is a strong search target
 
 ## Quick Start
 
@@ -171,10 +176,10 @@ uv run generate-examples trigger --type llm --key newmodel
 
 This generates: code examples + READMEs + Plivo docs guides.
 
-Then regenerate the reference pages to include the new provider:
+Then regenerate the provider's reference page:
 
 ```bash
-uv run generate-examples docs reference --type llm
+uv run generate-examples docs reference --provider provider
 ```
 
 ## Combination Math
@@ -198,7 +203,7 @@ Use `--max-examples N` to limit batch size.
 ├── docs/                             # Generated Plivo docs output
 │   ├── sidebar.json                  # Navigation config
 │   ├── concepts/                     # Architecture pages
-│   ├── reference/                    # Per-component-type pages
+│   ├── reference/                    # Per-provider pages
 │   └── guides/                       # Per-example tutorials
 └── voice_agent_generator/
     ├── __init__.py

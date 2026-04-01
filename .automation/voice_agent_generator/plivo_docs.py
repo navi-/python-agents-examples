@@ -7,22 +7,24 @@ Generates three types of content:
    with a specific stack. One guide per example.
    Path: docs/guides/{example-name}.md
 
-2. **Reference** (per component type):
-   Comprehensive reference pages organized by role (STT, LLM, TTS, VAD).
-   Each page covers ALL providers for that role. When a new model releases,
-   you update one page — not create a new one.
-   Path: docs/reference/{component-type}.md
+2. **Reference** (per provider):
+   One page per provider (OpenAI, Deepgram, ElevenLabs, etc.). Each page covers
+   ALL roles that provider serves (LLM, STT, TTS, S2S) with per-API-surface
+   sections. Model versions with breaking API changes get separate integration
+   sections within the same page.
+   Path: docs/reference/{provider}.md
 
 3. **Concepts** (architecture & decisions):
    Explains the universal patterns: Plivo WebSocket protocol, audio pipeline,
    turn detection strategies, orchestration approaches.
    Path: docs/concepts/{topic}.md
 
-Why this structure (not per-model-series):
-- Users search by task ("add Deepgram STT to Plivo") not by model version
-- Per-model docs create 90% duplication (GPT-4.1 vs GPT-5.4 are near-identical)
-- LLM-SEO: "Plivo voice agent Deepgram STT" beats "Plivo GPT-4.1-mini voice agent"
-- New model releases update a reference page, not fragment the docs
+Why per-provider (not per-model-series or per-component-type):
+- Users search by provider ("Plivo Deepgram voice agent", "Plivo OpenAI STT")
+- One page per provider: all API surfaces in one place (Chat, Realtime, Whisper)
+- New model releases update ONE provider page, not fragment the docs
+- Breaking API changes (max_tokens → max_completion_tokens) are documented inline
+- LLM-SEO: "Plivo voice agent OpenAI integration" is a strong search target
 """
 
 from __future__ import annotations
@@ -34,17 +36,7 @@ import anthropic
 from loguru import logger
 
 from .planner import ExamplePlan
-from .registry import (
-    LLMS,
-    ORCHESTRATIONS,
-    STTS,
-    TTSS,
-    VOICE_NATIVE,
-    LLMComponent,
-    STTComponent,
-    TTSComponent,
-    VoiceNativeComponent,
-)
+from .registry import get_provider_catalog
 
 
 # =============================================================================
@@ -238,142 +230,186 @@ def _get_tags(plan: ExamplePlan) -> list[str]:
 
 
 # =============================================================================
-# Reference page generator — one page per component type
+# Reference page generator — one page per provider
 # =============================================================================
 
 
-def _build_reference_prompt(
-    component_type: str,
-    components: dict,
+def _build_provider_reference_prompt(
+    provider_key: str,
+    provider_data: dict,
     existing_examples: list[str],
 ) -> str:
-    """Build the prompt for a reference documentation page."""
+    """Build the prompt for a per-provider reference documentation page."""
+    display_name = provider_data["display_name"]
 
-    if component_type == "stt":
-        title = "Speech-to-Text (STT) Providers"
-        seo = "Compare STT providers for Plivo voice agents: Deepgram, Sarvam, Whisper, Google Cloud. Configuration, audio formats, and integration code."
-        intro = "Every voice agent needs to convert caller speech to text. This page covers all supported STT providers, their configuration, and how to integrate each one."
-    elif component_type == "llm":
-        title = "LLM Providers"
-        seo = "Use OpenAI, Anthropic Claude, Google Gemini, or xAI Grok as the LLM in your Plivo voice agent. Configuration, function calling, and streaming setup."
-        intro = "The LLM processes transcribed speech and generates responses. This page covers all supported LLM providers and how to configure each one."
-    elif component_type == "tts":
-        title = "Text-to-Speech (TTS) Providers"
-        seo = "Compare TTS providers for Plivo voice agents: ElevenLabs, Cartesia, OpenAI TTS, Grok TTS. Audio formats, streaming protocols, and voice selection."
-        intro = "TTS converts the LLM's text response into audio that plays to the caller. This page covers all supported TTS providers and their audio format details."
-    elif component_type == "voice_native":
-        title = "Speech-to-Speech (S2S) APIs"
-        seo = "Use Grok Voice, GPT Realtime, or Gemini Live for end-to-end speech-to-speech voice agents on Plivo. No separate STT/TTS needed."
-        intro = "S2S APIs handle speech recognition, language model reasoning, and speech synthesis in a single API call. This page covers all supported S2S providers."
-    else:
-        title = component_type.title()
-        seo = ""
-        intro = ""
+    # Build role summary
+    roles = []
+    if provider_data["llms"]:
+        roles.append("LLM")
+    if provider_data["stts"]:
+        roles.append("STT")
+    if provider_data["ttss"]:
+        roles.append("TTS")
+    if provider_data["voice_native"]:
+        roles.append("Speech-to-Speech (S2S)")
+    roles_str = ", ".join(roles)
 
-    # Build component details
-    component_details = []
-    for key, comp in components.items():
-        if isinstance(comp, STTComponent):
-            component_details.append(textwrap.dedent(f"""\
-                ### {comp.name}
-                - Key: `{key}`
-                - Provider: {comp.provider}
-                - Protocol: {comp.api_style}
-                - Input format: {comp.input_format} at {comp.input_sample_rate}Hz
-                - Needs resample from Plivo 8kHz: {comp.needs_resample_from_plivo}
-                - Model: `{comp.model_id}`
-                - Env var: {', '.join(comp.env_vars)}
-                - API docs: {comp.doc_url}
-            """))
-        elif isinstance(comp, LLMComponent):
-            component_details.append(textwrap.dedent(f"""\
-                ### {comp.name}
-                - Key: `{key}`
-                - Provider: {comp.provider}
-                - Protocol: {comp.api_style}
-                - Streaming: {comp.streaming}
-                - Function calling: {comp.supports_tools}
-                - Model: `{comp.model_id}`
-                - Max tokens default: {comp.max_tokens_default}
-                - Env var: {', '.join(comp.env_vars)}
-                - API docs: {comp.doc_url}
-            """))
-        elif isinstance(comp, TTSComponent):
-            component_details.append(textwrap.dedent(f"""\
-                ### {comp.name}
-                - Key: `{key}`
-                - Provider: {comp.provider}
-                - Protocol: {comp.api_style}
-                - Output format: {comp.output_format} at {comp.output_sample_rate}Hz
-                - Needs resample to Plivo 8kHz: {comp.needs_resample_to_plivo}
-                - Default voice: `{comp.voice_id_default}`
-                - Env var: {', '.join(comp.env_vars)}
-                - API docs: {comp.doc_url}
-                {f'- Notes: {comp.notes}' if comp.notes else ''}
-            """))
-        elif isinstance(comp, VoiceNativeComponent):
-            component_details.append(textwrap.dedent(f"""\
-                ### {comp.name}
-                - Key: `{key}`
-                - Provider: {comp.provider}
-                - Protocol: {comp.api_style}
-                - Input: {comp.input_format} at {comp.input_sample_rate}Hz
-                - Output: {comp.output_format} at {comp.output_sample_rate}Hz
-                - Model: `{comp.model_id}`
-                - Env var: {', '.join(comp.env_vars)}
-                - API docs: {comp.doc_url}
-            """))
+    seo = (
+        f"Integrate {display_name} with Plivo voice agents. "
+        f"Covers {roles_str} — configuration, audio formats, API versions, and code."
+    )[:160]
+
+    # Group components by API surface/version
+    api_surfaces = []
+
+    for key, comp in provider_data["llms"]:
+        api_surfaces.append(textwrap.dedent(f"""\
+            ### LLM: {comp.name} (`{comp.model_id}`)
+            - Registry key: `{key}`
+            - API surface: `{comp.api_version}` ({comp.api_style})
+            - Max tokens param: `{comp.max_tokens_param}`
+            - Streaming: {comp.streaming}
+            - Function calling: {comp.supports_tools}
+            - Max tokens default: {comp.max_tokens_default}
+            - Env vars: {', '.join(comp.env_vars)}
+            - API docs: {comp.doc_url}
+            - Integration notes:
+            {chr(10).join(f'  - {n}' for n in comp.integration_notes)}
+        """))
+
+    for key, comp in provider_data["stts"]:
+        api_surfaces.append(textwrap.dedent(f"""\
+            ### STT: {comp.name} (`{comp.model_id or 'default'}`)
+            - Registry key: `{key}`
+            - API surface: `{comp.api_version}` ({comp.api_style})
+            - Input: {comp.input_format} at {comp.input_sample_rate}Hz
+            - Resample from Plivo 8kHz needed: {comp.needs_resample_from_plivo}
+            - Env vars: {', '.join(comp.env_vars)}
+            - API docs: {comp.doc_url}
+            - Integration notes:
+            {chr(10).join(f'  - {n}' for n in comp.integration_notes)}
+        """))
+
+    for key, comp in provider_data["ttss"]:
+        api_surfaces.append(textwrap.dedent(f"""\
+            ### TTS: {comp.name} (`{comp.voice_id_default or 'default'}`)
+            - Registry key: `{key}`
+            - API surface: `{comp.api_version}` ({comp.api_style})
+            - Output: {comp.output_format} at {comp.output_sample_rate}Hz
+            - Resample to Plivo 8kHz needed: {comp.needs_resample_to_plivo}
+            - Env vars: {', '.join(comp.env_vars)}
+            - API docs: {comp.doc_url}
+            - Integration notes:
+            {chr(10).join(f'  - {n}' for n in comp.integration_notes)}
+            {f'- Notes: {comp.notes}' if comp.notes else ''}
+        """))
+
+    for key, comp in provider_data["voice_native"]:
+        api_surfaces.append(textwrap.dedent(f"""\
+            ### S2S: {comp.name} (`{comp.model_id}`)
+            - Registry key: `{key}`
+            - API surface: `{comp.api_version}` ({comp.api_style})
+            - Input: {comp.input_format} at {comp.input_sample_rate}Hz
+            - Output: {comp.output_format} at {comp.output_sample_rate}Hz
+            - Env vars: {', '.join(comp.env_vars)}
+            - API docs: {comp.doc_url}
+            - Integration notes:
+            {chr(10).join(f'  - {n}' for n in comp.integration_notes)}
+        """))
+
+    # Identify API version groups for breaking change documentation
+    version_groups = {}
+    for key, comp in provider_data["llms"]:
+        v = comp.api_version
+        version_groups.setdefault(v, []).append((key, comp, "llm"))
+    for key, comp in provider_data["stts"]:
+        v = comp.api_version
+        version_groups.setdefault(v, []).append((key, comp, "stt"))
+    for key, comp in provider_data["ttss"]:
+        v = comp.api_version
+        version_groups.setdefault(v, []).append((key, comp, "tts"))
+    for key, comp in provider_data["voice_native"]:
+        v = comp.api_version
+        version_groups.setdefault(v, []).append((key, comp, "voice_native"))
+
+    version_info = ""
+    if len(version_groups) > 1:
+        version_info = (
+            f"\n## API version groups (IMPORTANT — different integration code)\n"
+            f"This provider has {len(version_groups)} distinct API surfaces. "
+            f"Models using different API versions require DIFFERENT integration code.\n\n"
+        )
+        for version, components in version_groups.items():
+            names = ", ".join(f"{c.name} ({role})" for _, c, role in components)
+            version_info += f"- **`{version}`**: {names}\n"
+        version_info += (
+            "\nEach API surface MUST have its own integration section with "
+            "separate code snippets, connection setup, and message formats.\n"
+        )
 
     return textwrap.dedent(f"""\
-        Write a reference documentation page for plivo.com/docs about {title}.
+        Write a reference documentation page for plivo.com/docs about {display_name}.
+
+        This is a PER-PROVIDER page. It covers ALL roles {display_name} serves
+        in a Plivo voice agent: {roles_str}.
 
         ## Frontmatter
         ```yaml
         ---
-        title: "{title}"
+        title: "{display_name} Integration for Plivo Voice Agents"
         description: "{seo}"
-        slug: "reference/{component_type}-providers"
-        sidebar_label: "{title}"
-        tags: [voice-agent, reference, {component_type}]
+        slug: "reference/{provider_key}"
+        sidebar_label: "{display_name}"
+        tags: [voice-agent, reference, {provider_key}, {', '.join(r.lower() for r in roles)}]
         ---
         ```
 
-        ## Introduction
-        {intro}
-
-        ## Components to document
-        {chr(10).join(component_details)}
+        ## All components from this provider
+        {chr(10).join(api_surfaces)}
+        {version_info}
 
         ## Page structure
 
-        1. **Introduction**: What role this component plays in the voice agent pipeline.
-           Why choosing the right provider matters (latency, cost, language support).
+        1. **Provider overview**: What {display_name} offers for voice agents.
+           Which roles it serves ({roles_str}). Auth setup (API key, env var).
 
-        2. **Quick comparison table**: All providers side-by-side with key specs.
-           Columns: Provider | Protocol | Audio Format | Sample Rate | Key Feature
+        2. **Quick capabilities table**: All components side-by-side.
+           Columns: Role | Component | API Surface | Protocol | Audio Format | Key Spec
 
-        3. **Per-provider sections** (H2 each):
-           For each provider:
-           a. Overview (1-2 sentences, what makes it unique)
-           b. Configuration (env vars, model selection)
-           c. Audio format details (input/output format, sample rates, resample needed?)
-           d. Integration code snippet (the key connection/streaming code, 15-25 lines)
-           e. Example projects that use this provider (link to guides)
+        3. **Per-API-surface sections** (H2 each):
+           Group by API surface/version, NOT by individual model. For example, if
+           this provider has chat-v1 and chat-v2 LLMs, those are TWO sections with
+           different integration code. If it has a Realtime S2S API, that's another section.
 
-        4. **Audio format compatibility matrix**:
-           Table showing which providers work at which sample rates and what
-           conversion is needed for Plivo's 8kHz μ-law.
+           For each API surface:
+           a. Which models use this surface (with a model table if multiple)
+           b. Connection setup (endpoint, auth, WebSocket URL or HTTP endpoint)
+           c. Message format / request structure
+           d. Audio format details (if applicable)
+           e. Integration code snippet (15-30 lines of REAL code)
+           f. **Breaking changes** between model versions using THIS surface
+              (e.g., `max_tokens` → `max_completion_tokens` for OpenAI chat-v2)
+           g. Example projects that use this API surface
 
-        5. **Switching providers**:
-           What files to change when swapping one provider for another.
-           (utils.py for audio conversion, agent.py for API client, .env for keys)
+        4. **Audio format compatibility** (if provider has STT/TTS/S2S):
+           What conversion is needed between this provider and Plivo 8kHz μ-law.
+           Include the conversion function names (plivo_to_X, X_to_plivo).
+
+        5. **Migration guide** (if multiple API versions exist):
+           What changes when upgrading from one API version to another.
+           Concrete diff of what code lines change.
 
         ## Rules
+        - Organize by API surface, not by model. Models are config; API surfaces are code.
+        - When two models share the SAME API surface (same code, different model_id),
+          list them in a single table within that section — don't repeat the integration.
+        - When models require DIFFERENT code (different API version), they MUST be in
+          separate sections with separate code snippets.
+        - Highlight breaking changes with `> **Breaking change**: ...` callouts
         - Code snippets should show REAL patterns from the example codebase
-        - Include the conversion function names (plivo_to_deepgram, elevenlabs_to_plivo, etc.)
-        - Cross-link to guides: [Build with {{STT}} + {{LLM}} + {{TTS}}](/docs/guides/{{example-name}})
+        - Cross-link to guides: [Build with X + Y + Z](/docs/guides/{{example-name}})
         - Cross-link to concepts: [Audio Pipeline](/docs/concepts/audio-pipeline)
-        - SEO: use the provider names and "Plivo voice agent" naturally in headings
+        - SEO: use "{display_name} Plivo voice agent" naturally in headings
 
         ## Existing examples in the repo
         {', '.join(existing_examples)}
@@ -430,7 +466,7 @@ class PlivoDocsGenerator:
 
     Produces three content types:
     - Guides: per-stack tutorials (one per example)
-    - Reference: per-component-type pages (STT, LLM, TTS, Voice-Native)
+    - Reference: per-provider pages (OpenAI, Deepgram, etc.)
     - Concepts: architecture and decision pages
     """
 
@@ -457,25 +493,33 @@ class PlivoDocsGenerator:
         prompt = _build_guide_prompt(plan, agent_py, utils_py, server_py)
         return self._call_claude(prompt, "guide")
 
-    def generate_reference(self, component_type: str) -> str:
-        """Generate a reference page for a component type."""
-        logger.info(f"Generating Plivo docs reference for {component_type}")
+    def generate_provider_reference(self, provider_key: str) -> str:
+        """Generate a reference page for a specific provider.
 
-        component_map = {
-            "stt": STTS,
-            "llm": LLMS,
-            "tts": TTSS,
-            "voice_native": VOICE_NATIVE,
-        }
+        One page per provider, covering all roles (LLM, STT, TTS, S2S) and
+        all API surfaces with versioned integration sections.
+        """
+        catalog = get_provider_catalog()
+        provider_data = catalog.get(provider_key)
+        if not provider_data:
+            available = ", ".join(sorted(catalog.keys()))
+            raise ValueError(
+                f"Unknown provider: {provider_key}. Available: {available}"
+            )
 
-        components = component_map.get(component_type, {})
-        if not components:
-            raise ValueError(f"Unknown component type: {component_type}")
+        logger.info(
+            f"Generating Plivo docs reference for provider: "
+            f"{provider_data['display_name']}"
+        )
 
-        existing = [d.name for d in self.repo_root.iterdir()
-                    if d.is_dir() and not d.name.startswith(".")]
+        existing = [
+            d.name for d in self.repo_root.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        ]
 
-        prompt = _build_reference_prompt(component_type, components, existing)
+        prompt = _build_provider_reference_prompt(
+            provider_key, provider_data, existing
+        )
         return self._call_claude(prompt, "reference")
 
     def generate_concept(self, topic_key: str) -> str:
@@ -491,10 +535,11 @@ class PlivoDocsGenerator:
         return self._call_claude(prompt, "concept")
 
     def generate_all_references(self) -> dict[str, str]:
-        """Generate all reference pages."""
+        """Generate reference pages for all providers."""
+        catalog = get_provider_catalog()
         results = {}
-        for comp_type in ["stt", "llm", "tts", "voice_native"]:
-            results[comp_type] = self.generate_reference(comp_type)
+        for provider_key in sorted(catalog.keys()):
+            results[provider_key] = self.generate_provider_reference(provider_key)
         return results
 
     def generate_all_concepts(self) -> dict[str, str]:
@@ -521,9 +566,9 @@ class PlivoDocsGenerator:
         if references:
             ref_dir = self.docs_dir / "reference"
             ref_dir.mkdir(parents=True, exist_ok=True)
-            for comp_type, content in references.items():
-                (ref_dir / f"{comp_type}-providers.md").write_text(content)
-                logger.info(f"  Wrote reference: {comp_type}-providers.md")
+            for provider_key, content in references.items():
+                (ref_dir / f"{provider_key}.md").write_text(content)
+                logger.info(f"  Wrote reference: {provider_key}.md")
 
         if concepts:
             concepts_dir = self.docs_dir / "concepts"
@@ -544,6 +589,17 @@ class PlivoDocsGenerator:
         concepts: dict[str, str],
     ) -> None:
         """Generate a sidebar navigation file for the docs site."""
+        # For references, use provider display names from catalog
+        catalog = get_provider_catalog()
+        ref_items = []
+        for provider_key in references:
+            display = catalog.get(provider_key, {}).get("display_name", provider_key.title())
+            ref_items.append({
+                "type": "doc",
+                "id": f"reference/{provider_key}",
+                "label": display,
+            })
+
         sidebar = {
             "docs": [
                 {
@@ -553,8 +609,8 @@ class PlivoDocsGenerator:
                 },
                 {
                     "type": "category",
-                    "label": "Reference",
-                    "items": [f"reference/{k}-providers" for k in references],
+                    "label": "Provider Reference",
+                    "items": ref_items,
                 },
                 {
                     "type": "category",
