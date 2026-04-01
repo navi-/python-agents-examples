@@ -12,11 +12,11 @@ Phase 4 (`/review-example`) must have passed all checks. If not, run `/review-ex
 
 ## Instructions
 
-Read `CLAUDE.md` for documentation requirements. Use `grok-voice-native/README.md` as the template.
+Read `CLAUDE.md` for documentation requirements. Use `grok3-voice-native/README.md` as the template.
 
 ### 1. Generate README.md
 
-Create a comprehensive README following this section structure (from `grok-voice-native/README.md`):
+Create a comprehensive README following this section structure (from `grok3-voice-native/README.md`):
 
 #### Required Sections
 
@@ -45,7 +45,7 @@ Create a comprehensive README following this section structure (from `grok-voice
 
 - Use Markdown tables for structured data
 - Include code blocks with language hints (`bash`, `python`)
-- ASCII art diagrams for architecture (match grok-voice-native style)
+- ASCII art diagrams for architecture (match grok3-voice-native style)
 - Keep explanations concise but complete
 
 ### 2. Validate .env.example completeness

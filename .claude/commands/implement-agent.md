@@ -20,9 +20,9 @@ If an API docs URL is provided, fetch it to understand:
 - Function calling / tool use support
 
 Also read the reference implementations:
-- `grok-voice-native/inbound/agent.py` — native pattern with Silero VAD, barge-in, turn management
-- `grok-voice-native/outbound/agent.py` — outbound pattern with CallManager
-- `gemini-live-native/inbound/agent.py` — alternative native pattern (SDK-based)
+- `grok3-voice-native/inbound/agent.py` — native pattern with Silero VAD, barge-in, turn management
+- `grok3-voice-native/outbound/agent.py` — outbound pattern with CallManager
+- `gemini2.5-live-native/inbound/agent.py` — alternative native pattern (SDK-based)
 
 ### 2. Update utils.py
 
@@ -74,7 +74,7 @@ Include all tool functions from the scaffold (check_order_status, send_sms, sche
 ### 4. Implement outbound/agent.py
 
 Copy the inbound agent logic, then add:
-- `OutboundCallRecord` dataclass (from `grok-voice-native/outbound/agent.py`)
+- `OutboundCallRecord` dataclass (from `grok3-voice-native/outbound/agent.py`)
 - `CallManager` class (thread-safe call tracking)
 - `determine_outcome()` function (maps Plivo hangup causes)
 - `build_outbound_prompt()` for template variable substitution

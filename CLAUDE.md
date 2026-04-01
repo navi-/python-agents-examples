@@ -4,17 +4,58 @@ This repo contains production-ready voice agent examples using Plivo telephony. 
 
 ## Naming Convention
 
-`{ai-provider}-{optional-stt}-{optional-tts}-{orchestration}[-{variant}]`
+`{llm-provider+series}-{stt-provider+series}-{tts-provider+series}-{orchestration}[-{variant}]`
 
-Examples: `grok-voice-native`, `gemini-deepgram-elevenlabs-native`, `gemini-live-pipecat`
+**Every component always includes provider name + model series.** The series identifies the API contract; the size variant (mini/nano/pro/flash) is config in `.env`, not part of the folder name.
+
+### LLM component: `{provider}{version}`
+
+Drop the size class (mini/nano/pro/flash) — it's `.env` config. Only include size when two different sizes are used together in the same example.
+
+| Model | Folder component | Notes |
+|---|---|---|
+| `gpt-5.4-mini` | `gpt5.4` | drop "mini" |
+| `gpt-4.1` | `gpt4.1` | |
+| `gpt-4.1-mini` (alone) | `gpt4.1` | drop "mini" |
+| `gpt-4.1-mini` + `gpt-4.1` (dual) | `gpt4.1mini-gpt4.1` | two sizes → keep both |
+| `gpt-4o-mini` | `gpt4o` | drop "mini" |
+| `gemini-2.0-flash` | `gemini2` | drop "flash" |
+| `gemini-2.5-flash` (live API) | `gemini2.5-live` | drop "flash"; `-live` = S2S API type |
+| `gemini-3.1-flash` (live API) | `gemini3.1-live` | drop "flash"; `-live` = S2S API type |
+| `gpt-realtime-1.5` (S2S) | `gptrealtime1.5` | "realtime" is the model name |
+| `grok-3-fast-voice` (S2S) | `grok3-voice` | |
+
+### Voice AI (STT) component: `{provider}{model-name}{version}`
+
+| Model | Folder component |
+|---|---|
+| Deepgram `nova-2-phonecall` | `deepgramnova2` |
+| Deepgram `nova-3` | `deepgramnova3` |
+| Deepgram `flux` | `deepgramflux` |
+| AssemblyAI `u3-rt-pro` | `assemblyaiu3` |
+| Sarvam STT | `sarvam` (no named model series) |
+
+### Voice AI (TTS) component: `{provider}{model-name}{version}`
+
+| Model | Folder component |
+|---|---|
+| ElevenLabs `eleven_flash_v2_5` | `elevenflashv2.5` |
+| Cartesia `sonic-2` | `cartesiasonic2` |
+| Cartesia `sonic-3` | `cartesiasonic3` |
+| OpenAI `gpt-4o-mini-tts` | `openaitts4o` |
+| Grok `grok-3-fast-voice` (TTS only) | `groktts3` |
+
+### Examples
+
+`gpt5.4-assemblyaiu3-cartesiasonic3-native`, `gemini2.5-live-pipecat`, `gpt4.1-deepgramnova3-elevenflashv2.5-native`
 
 Orchestration types:
 - **native** — raw websockets/SDK, custom asyncio task management, client-side Silero VAD (default)
 - **pipecat** / **livekit** / **vapi** — framework-based Pipeline, framework-managed VAD
 
 Variants:
-- **`-no-vad`** — explicitly opts out of client-side VAD (e.g., `gemini-live-native-no-vad` relies on server-side VAD)
-- **`-webrtcvad`** — uses WebRTC VAD instead of Silero (e.g., `gemini-live-native-webrtcvad`)
+- **`-no-vad`** — explicitly opts out of client-side VAD (e.g., `gemini2.5-live-native-no-vad` relies on server-side VAD)
+- **`-webrtcvad`** — uses WebRTC VAD instead of Silero (e.g., `gemini2.5-live-native-webrtcvad`)
 - All new native examples include Silero VAD by default. These suffixes are the exception, not the rule.
 
 ## Canonical File Structure (ALL examples)
@@ -214,13 +255,13 @@ Run: `uv run pytest tests/test_integration.py -v -k "unit"` (offline)
 
 ## Reference Files
 
-- **Primary reference**: `grok-voice-native/` — complete native example with Silero VAD
-- `grok-voice-native/utils.py` — SileroVADProcessor class, audio conversion
-- `grok-voice-native/inbound/agent.py` — native agent pattern with VAD + barge-in
-- `grok-voice-native/outbound/agent.py` — OutboundCallRecord, CallManager pattern
-- `grok-voice-native/tests/` — full test suite to replicate
-- `gemini-live-native-no-vad/` — alternative native pattern (SDK-based, server-side VAD, no client-side VAD)
-- `gemini-live-pipecat/inbound/agent.py` — framework Pipeline reference
+- **Primary reference**: `grok3-voice-native/` — complete native example with Silero VAD
+- `grok3-voice-native/utils.py` — SileroVADProcessor class, audio conversion
+- `grok3-voice-native/inbound/agent.py` — native agent pattern with VAD + barge-in
+- `grok3-voice-native/outbound/agent.py` — OutboundCallRecord, CallManager pattern
+- `grok3-voice-native/tests/` — full test suite to replicate
+- `gemini2.5-live-native-no-vad/` — alternative native pattern (SDK-based, server-side VAD, no client-side VAD)
+- `gemini2.5-live-pipecat/inbound/agent.py` — framework Pipeline reference
 
 ## README Demo Description (Required)
 

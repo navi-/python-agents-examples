@@ -17,7 +17,7 @@ Requirements:
     - Port 18001 available (used by test server)
 
 Usage:
-    cd gpt5.4mini-assemblyai-cartesia-native
+    cd gpt5.4-assemblyaiu3-cartesiasonic3-native
     uv run pytest tests/test_e2e_live.py -v -s
 """
 

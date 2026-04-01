@@ -19,7 +19,7 @@ Requirements:
     - Port 18003 available
 
 Usage:
-    cd gpt5.4mini-assemblyai-cartesia-native
+    cd gpt5.4-assemblyaiu3-cartesiasonic3-native
     uv run pytest tests/test_outbound_call.py -v -s
 """
 
