@@ -7,41 +7,49 @@ Guidelines for contributing voice agent examples to this repository.
 Each example project uses Plivo as the telephony platform. Project names follow this structure:
 
 ```
-{llm}-{stt}-{tts}-{framework}
+{llm-provider+series}-{stt-provider+series}-{tts-provider+series}-{orchestration}[-{variant}]
 ```
 
-| Component | Description |
-|-----------|-------------|
-| `llm` | Large Language Model provider (e.g., `openai`, `gemini`, `claude`) |
-| `stt` | Speech-to-Text provider (e.g., `deepgram`, `whisper`, `gemini`) |
-| `tts` | Text-to-Speech provider (e.g., `cartesia`, `elevenlabs`, `gemini`) |
-| `framework` | Orchestration framework, or `native` if none |
+Every component includes the **provider name** and **model series**. The series identifies the API contract; the size variant (mini/nano/pro/flash) is config in `.env`, not part of the folder name.
 
-### Framework Values
+### LLM: `{provider}{version}`
+
+Drop the size class (mini/nano/pro/flash) unless two different sizes are used together.
+
+| Model | Folder component | Notes |
+|---|---|---|
+| `gpt-5.4-mini` | `gpt5.4` | drop "mini" |
+| `gpt-4.1-mini` + `gpt-4.1` (dual) | `gpt4.1mini-gpt4.1` | two sizes → keep both |
+| `gemini-2.5-flash` (live API) | `gemini2.5-live` | drop "flash"; `-live` = S2S API |
+| `gpt-realtime-1.5` (S2S) | `gptrealtime1.5` | "realtime" is the model name |
+| `grok-3-fast-voice` (S2S) | `grok3-voice` | |
+
+### STT/TTS: `{provider}{model-name}{version}`
+
+| Model | Folder component |
+|---|---|
+| Deepgram `nova-3` | `deepgramnova3` |
+| AssemblyAI `u3-rt-pro` | `assemblyaiu3` |
+| ElevenLabs `eleven_flash_v2_5` | `elevenflashv2.5` |
+| Cartesia `sonic-3` | `cartesiasonic3` |
+| OpenAI `gpt-4o-mini-tts` | `openaitts4o` |
+
+### Orchestration
 
 | Value | Meaning |
 |-------|---------|
+| `native` | Direct API integration, no orchestration framework |
 | `pipecat` | Uses the Pipecat framework |
 | `livekit` | Uses the LiveKit Agents framework |
-| `native` | Direct API integration, no orchestration framework |
-
-### Speech-to-Speech (S2S) Models
-
-For S2S models that handle speech input and output natively (like Gemini Live, GPT-4o Realtime), use the product name followed by the framework:
-
-```
-{product-name}-{framework}
-```
-
-Examples: `gemini-live-native`, `gpt4o-realtime-native`, `gemini-live-pipecat`
+| `vapi` | Uses the Vapi framework |
 
 ### Examples
 
 | Project Name | LLM | STT | TTS | Framework |
-|--------------|-----|-----|-----|-----------|
-| `openai-deepgram-cartesia-pipecat` | OpenAI | Deepgram | Cartesia | Pipecat |
-| `openai-deepgram-elevenlabs-pipecat` | OpenAI | Deepgram | ElevenLabs | Pipecat |
-| `gemini-live-native` | Gemini (S2S) | Gemini (S2S) | Gemini (S2S) | None |
+|---|---|---|---|---|
+| `gpt5.4-assemblyaiu3-cartesiasonic3-native` | GPT 5.4 | AssemblyAI U3 | Cartesia Sonic 3 | None |
+| `gemini2.5-live-native` | Gemini 2.5 (S2S) | Gemini 2.5 (S2S) | Gemini 2.5 (S2S) | None |
+| `gpt4.1-deepgramnova3-elevenflashv2.5-vapi` | GPT 4.1 | Deepgram Nova 3 | ElevenLabs Flash v2.5 | Vapi |
 
 ## Project Structure
 
@@ -49,11 +57,21 @@ Each example project should be a self-contained directory at the repository root
 
 ```
 {project-name}/
-├── README.md           # Setup and usage instructions
-├── requirements.txt    # or pyproject.toml
-├── .env.example        # Environment variable template
-├── server.py           # Main entry point (or app.py)
-└── ...
+├── inbound/
+│   ├── agent.py        # AI-specific voice agent class
+│   ├── server.py       # FastAPI: /answer, /ws, /hangup
+│   └── system_prompt.md
+├── outbound/
+│   ├── agent.py        # Same agent + OutboundCallRecord, CallManager
+│   ├── server.py       # FastAPI: /outbound/call, /outbound/ws
+│   └── system_prompt.md
+├── utils.py            # Audio conversion, VAD, phone utils
+├── tests/              # Unit, integration, e2e, live call tests
+├── pyproject.toml
+├── .env.example
+├── .gitignore
+├── Dockerfile
+└── README.md
 ```
 
 ## Adding a New Example

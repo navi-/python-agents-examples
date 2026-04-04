@@ -10,11 +10,11 @@
 
 Read `CLAUDE.md` for testing requirements. Read the existing test files in `{example-name}/tests/` and the agent code to understand what to test.
 
-Use `grok-voice-native/tests/` as the primary reference for test patterns.
+Use `grok3-voice-native/tests/` as the primary reference for test patterns.
 
 ### 1. Write test_integration.py
 
-Create 4 test classes following `grok-voice-native/tests/test_integration.py`:
+Create 4 test classes following `grok3-voice-native/tests/test_integration.py`:
 
 **TestUnitAudioConversion** (offline, `-k "unit"`):
 - `test_ulaw_to_pcm_conversion` — silence bytes → PCM, check size and amplitude
@@ -39,7 +39,7 @@ Create 4 test classes following `grok-voice-native/tests/test_integration.py`:
 
 ### 2. Write test_e2e_live.py
 
-Reference: `grok-voice-native/tests/test_e2e_live.py`
+Reference: `grok3-voice-native/tests/test_e2e_live.py`
 
 Test that the agent works end-to-end with the real API (no phone call):
 - Start server subprocess
@@ -50,7 +50,7 @@ Test that the agent works end-to-end with the real API (no phone call):
 
 ### 3. Write test_live_call.py
 
-Reference: `grok-voice-native/tests/test_live_call.py`
+Reference: `grok3-voice-native/tests/test_live_call.py`
 
 Real inbound call test:
 1. Start server as subprocess

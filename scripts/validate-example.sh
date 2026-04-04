@@ -15,7 +15,7 @@ set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <example-name>"
-    echo "Example: $0 grok-voice-native"
+    echo "Example: $0 grok3-voice-native"
     exit 1
 fi
 
