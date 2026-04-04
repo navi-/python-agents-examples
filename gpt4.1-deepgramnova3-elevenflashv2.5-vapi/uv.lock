@@ -364,7 +364,7 @@ wheels = [
 ]
 
 [[package]]
-name = "gpt4-1-deepgram-elevenlabs-vapi"
+name = "gpt4-1-deepgramnova3-elevenflashv2-5-vapi"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

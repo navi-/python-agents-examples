@@ -892,7 +892,7 @@ wheels = [
 ]
 
 [[package]]
-name = "gemini-live-pipecat"
+name = "gemini2-5-live-pipecat"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

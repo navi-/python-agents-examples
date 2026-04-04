@@ -739,7 +739,7 @@ wheels = [
 ]
 
 [[package]]
-name = "gpt4-1mini-sarvam-elevenlabs-plivo-voice-agent"
+name = "gpt4-1-sarvam-elevenflashv2-5-plivo-voice-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

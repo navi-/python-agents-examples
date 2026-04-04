@@ -579,7 +579,7 @@ wheels = [
 ]
 
 [[package]]
-name = "gemini3-1flash-live-plivo-voice-agent"
+name = "gemini3-1-live-plivo-voice-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

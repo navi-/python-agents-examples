@@ -740,7 +740,7 @@ wheels = [
 ]
 
 [[package]]
-name = "gpt4-1mini-gpt4-1-deepgram-elevenlabs-native"
+name = "gpt4-1mini-gpt4-1-deepgramnova3-elevenflashv2-5-native"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
