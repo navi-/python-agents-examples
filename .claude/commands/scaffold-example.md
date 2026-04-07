@@ -9,12 +9,27 @@
 
 ## Instructions
 
-Read `CLAUDE.md` for the canonical file structure and rules. Use `grok-voice-native/` as the primary reference.
+Read `CLAUDE.md` for the canonical file structure and rules. Use `grok3-voice-native/` as the primary reference.
 
 ### 0. Validate the example name
 
 Before creating any files, verify `{example-name}` follows the naming convention:
-`{provider}-{optional-stt}-{optional-tts}-{orchestration}[-{variant}]`
+`{llm-provider+series}-{stt-provider+series}-{tts-provider+series}-{orchestration}[-{variant}]`
+
+**Every component always includes provider name + model series.** The series identifies the API contract; the size variant (mini/nano/pro/flash) is `.env` config, not part of the folder name. Only include size when two different sizes are used together.
+
+**LLM:** `{provider}{version}` — drop size class unless two sizes used together
+- `gpt5.4`, `gpt4.1`, `gpt4o`, `gemini2`, `grok3`
+- Dual-LLM: `gpt4.1mini-gpt4.1` (two sizes → keep both)
+- S2S/multimodal: `gemini2.5-live`, `gemini3.1-live`, `gptrealtime1.5`, `grok3-voice`
+
+**STT:** `{provider}{model-name}{version}`
+- `deepgramnova2`, `deepgramnova3`, `deepgramflux`, `assemblyaiu3`, `sarvam`
+
+**TTS:** `{provider}{model-name}{version}`
+- `elevenflashv2.5`, `cartesiasonic2`, `cartesiasonic3`, `openaitts4o`, `groktts3`
+
+Examples: `gpt5.4-assemblyaiu3-cartesiasonic3-native`, `gemini2.5-live-pipecat`, `gpt4.1-deepgramnova3-elevenflashv2.5-native`
 
 - Must end with a known orchestration type: `native`, `pipecat`, `livekit`, `vapi`
 - If a variant suffix follows the orchestration type, it must be a known variant: `no-vad`, `webrtcvad`
@@ -54,7 +69,7 @@ README.md
 
 ### 2. Copy shared boilerplate verbatim
 
-Copy these files from `grok-voice-native/` WITHOUT modification:
+Copy these files from `grok3-voice-native/` WITHOUT modification:
 - `tests/conftest.py`
 - `tests/helpers.py`
 - `.gitignore`
@@ -62,28 +77,28 @@ Copy these files from `grok-voice-native/` WITHOUT modification:
 
 ### 3. Copy and adapt server files
 
-Copy `grok-voice-native/inbound/server.py` → `{example-name}/inbound/server.py`:
+Copy `grok3-voice-native/inbound/server.py` → `{example-name}/inbound/server.py`:
 - Replace "Grok" with the new agent name in FastAPI title/description
 - Replace `grok-plivo-voice-agent` with the new service name
 - Replace Plivo app name (`Grok_Voice_Agent` → `{NewAgent}_Voice_Agent`)
 - Keep ALL routes, webhook logic, and WebSocket handling identical
 
-Do the same for `grok-voice-native/outbound/server.py` → `{example-name}/outbound/server.py`.
+Do the same for `grok3-voice-native/outbound/server.py` → `{example-name}/outbound/server.py`.
 
 ### 4. Create system prompts
 
-Copy `grok-voice-native/inbound/system_prompt.md` and `outbound/system_prompt.md` as starting templates. The user can customize these later.
+Copy `grok3-voice-native/inbound/system_prompt.md` and `outbound/system_prompt.md` as starting templates. The user can customize these later.
 
 ### 5. Create agent.py skeletons
 
 **For native orchestration**:
-- `inbound/agent.py`: Skeleton with the 3-task pattern from `grok-voice-native/inbound/agent.py`
+- `inbound/agent.py`: Skeleton with the 3-task pattern from `grok3-voice-native/inbound/agent.py`
   - Class with `__init__`, `run()`, `_run_streaming_tasks()`, `_receive_from_plivo()`, `_receive_from_{api}()`, `_send_to_plivo()`
   - Import and use `SileroVADProcessor` from utils
   - All method bodies have `# TODO: Implement {api}-specific logic` comments
   - Include the tool functions (check_order_status, send_sms, etc.) from reference
   - Include public `run_agent()` function
-- `outbound/agent.py`: Same skeleton + `OutboundCallRecord`, `CallManager`, `determine_outcome` from `grok-voice-native/outbound/agent.py`
+- `outbound/agent.py`: Same skeleton + `OutboundCallRecord`, `CallManager`, `determine_outcome` from `grok3-voice-native/outbound/agent.py`
 
 **For framework orchestration**:
 - `inbound/agent.py`: Skeleton with `run_agent()` function that assembles a Pipeline
@@ -94,7 +109,7 @@ Copy `grok-voice-native/inbound/system_prompt.md` and `outbound/system_prompt.md
 ### 6. Create utils.py
 
 **For native**:
-- Copy the full `grok-voice-native/utils.py` structure
+- Copy the full `grok3-voice-native/utils.py` structure
 - Replace Grok-specific constants with placeholders for the new API:
   - `{API}_SAMPLE_RATE = 24000  # TODO: Set correct sample rate`
   - Rename `plivo_to_grok` → `plivo_to_{api}`, `grok_to_plivo` → `{api}_to_plivo`
@@ -108,7 +123,7 @@ Copy `grok-voice-native/inbound/system_prompt.md` and `outbound/system_prompt.md
 
 ### 7. Create pyproject.toml
 
-Based on `grok-voice-native/pyproject.toml`:
+Based on `grok3-voice-native/pyproject.toml`:
 - Update project name and description
 - Keep common deps: fastapi, uvicorn, websockets, plivo, python-dotenv, python-multipart, loguru, numpy, scipy, phonenumbers
 - For native: add `silero-vad>=5.1`, `torch>=2.0.0`
@@ -117,7 +132,7 @@ Based on `grok-voice-native/pyproject.toml`:
 
 ### 8. Create .env.example
 
-Based on `grok-voice-native/.env.example`:
+Based on `grok3-voice-native/.env.example`:
 - Replace xAI-specific vars with placeholders for the new API
 - Keep Plivo section, DEFAULT_COUNTRY_CODE, PUBLIC_URL, SERVER_PORT
 - For native: keep Silero VAD configuration section
@@ -125,7 +140,7 @@ Based on `grok-voice-native/.env.example`:
 
 ### 9. Create Dockerfile
 
-Based on `grok-voice-native/Dockerfile` — adjust only the COPY paths if needed.
+Based on `grok3-voice-native/Dockerfile` — adjust only the COPY paths if needed.
 
 ### 10. Create README.md
 

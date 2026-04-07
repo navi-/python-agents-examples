@@ -28,10 +28,10 @@ These examples use models that handle both speech input and output natively — 
 
 | Example | Model | Framework | Highlights |
 |---------|-------|-----------|------------|
-| [gemini-live-native](./gemini-live-native/) | Gemini Live | None | Direct API integration, function calling, auto-webhook config |
-| [gemini-live-pipecat](./gemini-live-pipecat/) | Gemini Live | Pipecat | Modular pipeline, built-in VAD, less code |
-| [gpt-realtime-native](./gpt-realtime-native/) | GPT Realtime 1.5 | None | Silero VAD, barge-in support, function calling |
-| [grok-voice-native](./grok-voice-native/) | Grok Voice | None | Silero VAD, barge-in support, function calling |
+| [gemini2.5-live-native](./gemini2.5-live-native/) | Gemini 2.5 Live | None | Direct API integration, function calling, auto-webhook config |
+| [gemini2.5-live-pipecat](./gemini2.5-live-pipecat/) | Gemini 2.5 Live | Pipecat | Modular pipeline, built-in VAD, less code |
+| [gptrealtime1.5-native](./gptrealtime1.5-native/) | GPT Realtime 1.5 | None | Silero VAD, barge-in support, function calling |
+| [grok3-voice-native](./grok3-voice-native/) | Grok 3 Voice | None | Silero VAD, barge-in support, function calling |
 
 ### STT + LLM + TTS Pipeline
 
@@ -39,9 +39,10 @@ These examples wire up separate providers for speech-to-text, language model, an
 
 | Example | STT | LLM | TTS | Framework |
 |---------|-----|-----|-----|-----------|
-| [gemini-deepgram-cartesia-native](./gemini-deepgram-cartesia-native/) | Deepgram | Gemini | Cartesia | None |
-| [gemini-deepgram-elevenlabs-native](./gemini-deepgram-elevenlabs-native/) | Deepgram | Gemini | ElevenLabs | None |
-| [gpt4o-deepgram-openaitts-pipecat](./gpt4o-deepgram-openaitts-pipecat/) | Deepgram | GPT-4o-mini | GPT-4o-mini-TTS | Pipecat |
+| [gemini2-deepgramnova2-cartesiasonic2-native](./gemini2-deepgramnova2-cartesiasonic2-native/) | Deepgram Nova 2 | Gemini 2 | Cartesia Sonic 2 | None |
+| [gemini2-deepgramnova2-elevenflashv2.5-native](./gemini2-deepgramnova2-elevenflashv2.5-native/) | Deepgram Nova 2 | Gemini 2 | ElevenLabs Flash v2.5 | None |
+| [gpt4o-deepgramnova3-openaitts4o-pipecat](./gpt4o-deepgramnova3-openaitts4o-pipecat/) | Deepgram Nova 3 | GPT-4o | OpenAI TTS 4o | Pipecat |
+| [gpt5.4-assemblyaiu3-cartesiasonic3-native](./gpt5.4-assemblyaiu3-cartesiasonic3-native/) | AssemblyAI U3 | GPT 5.4 | Cartesia Sonic 3 | None |
 | [daily-plivo](./daily-plivo/) | Deepgram | OpenAI | Cartesia | Pipecat + Daily |
 
 ## Prerequisites
@@ -56,7 +57,7 @@ These examples wire up separate providers for speech-to-text, language model, an
 
 1. **Choose an example** from the tables above and navigate to its directory:
    ```bash
-   cd gemini-live-native  # or any other example
+   cd gemini2.5-live-native  # or any other example
    ```
 
 2. **Install dependencies:**
