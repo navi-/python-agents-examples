@@ -10,6 +10,7 @@ dependencies = [
     "livekit-plugins-openai>=1.5.0",
     "livekit-plugins-elevenlabs>=1.5.0",
     "livekit-plugins-silero>=1.5.0",
+    "livekit-plugins-turn-detector>=1.5.0",
     "livekit-plugins-noise-cancellation>=0.2.0",
     "livekit-api>=1.0.0",
     "fastapi>=0.115.0",
@@ -18,7 +19,6 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "loguru>=0.7.0",
     "phonenumbers>=8.13.0",
-    "numpy>=1.24.0",
 ]
 
 [dependency-groups]

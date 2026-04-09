@@ -1,6 +1,6 @@
 # GPT-5.2 Mini + Deepgram Flux + ElevenLabs Flash v2.5 — LiveKit Voice Agent
 
-LiveKit Agents framework orchestration with Plivo SIP trunking. Inbound calls hit Plivo, route via SIP to a LiveKit room where a `VoicePipelineAgent` runs the full STT-LLM-TTS pipeline. STT is Deepgram Flux (`/listen/v2` WebSocket, streaming transcription optimized for conversational audio). LLM is OpenAI `gpt-5.2-mini` via Responses API with 5 function tools. TTS is ElevenLabs `eleven_flash_v2_5` (low-latency streaming synthesis). VAD is Silero (pre-loaded at worker startup via `prewarm`, runs locally on CPU). Noise cancellation is Krisp BVC (background voice cancellation, applied to inbound audio before STT). LiveKit handles all audio transport, format conversion, and interruption management natively.
+LiveKit Agents framework orchestration with Plivo SIP trunking. Inbound calls hit Plivo, route via SIP to a LiveKit room where a `VoicePipelineAgent` runs the full STT-LLM-TTS pipeline. STT is Deepgram Flux (`/listen/v2` WebSocket, streaming transcription optimized for conversational audio). LLM is OpenAI `gpt-5.2-mini` via Responses API with 5 function tools. TTS is ElevenLabs `eleven_flash_v2_5` (low-latency streaming synthesis). Turn detection uses Silero VAD (speech presence, barge-in trigger) + LiveKit MultilingualModel (135M transformer, semantic end-of-turn prediction on partial transcripts in a 4-turn sliding window). Noise cancellation is Krisp BVC (background voice cancellation, applied to inbound audio before STT). LiveKit handles all audio transport, format conversion, and interruption management natively — no mu-law conversion needed in application code.
 
 - Outbound calls use LiveKit's SIP API (`CreateSIPParticipantRequest`) to dial through a Plivo SIP trunk, with call metadata (system prompt, initial message) passed via room metadata JSON
 - Barge-in is handled by LiveKit's `VoicePipelineAgent` with `allow_interruptions=True` — Silero VAD detects speech onset, pipeline cancels in-flight TTS, and new STT input is processed immediately
@@ -41,6 +41,7 @@ LiveKit Agents framework orchestration with Plivo SIP trunking. Inbound calls hi
 | LLM | OpenAI | `gpt-5.2-mini` | HTTPS (Responses API) | 5 function tools |
 | TTS | ElevenLabs | `eleven_flash_v2_5` | WebSocket | Low-latency streaming synthesis |
 | VAD | Silero | ONNX v5 | Local CPU | Pre-loaded in prewarm, ~32ms frames |
+| Turn Detect | LiveKit | MultilingualModel | Local CPU | 135M transformer, semantic EOT on partial transcripts |
 | Noise | Krisp | BVC | Local | Background voice cancellation |
 | Transport | LiveKit | SIP Bridge + WebRTC | SIP/WebRTC | Handles audio format conversion |
 | Telephony | Plivo | SIP Trunk | SIP | Inbound + outbound via SIP |

@@ -4,7 +4,7 @@ Uses LiveKit Agents framework with:
 - Deepgram Flux STT (streaming speech-to-text via /listen/v2)
 - OpenAI GPT-5.2-mini LLM
 - ElevenLabs Flash v2.5 TTS
-- Silero VAD (voice activity detection)
+- Silero VAD (voice activity detection) + MultilingualModel (semantic turn detection)
 - Krisp BVC (background voice cancellation / noise cancellation)
 
 The agent runs as a LiveKit worker that auto-joins rooms when SIP participants
@@ -144,6 +144,7 @@ async def _entrypoint(ctx) -> None:
     from livekit.agents.pipeline import VoicePipelineAgent
     from livekit.plugins import deepgram, elevenlabs, noise_cancellation
     from livekit.plugins import openai as openai_plugin
+    from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     logger.info(f"Connected to room: {ctx.room.name}")
@@ -159,6 +160,9 @@ async def _entrypoint(ctx) -> None:
     tools = _build_tool_functions()
 
     # Create the voice pipeline agent
+    # Turn detection: Silero VAD handles speech presence and barge-in triggers,
+    # MultilingualModel (135M transformer) provides semantic end-of-turn prediction
+    # by analyzing partial transcripts in a 4-turn sliding window context.
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model="nova-3"),
@@ -169,6 +173,7 @@ async def _entrypoint(ctx) -> None:
         ),
         chat_ctx=initial_ctx,
         fnc_ctx=tools,
+        turn_detector=MultilingualModel(),
         noise_cancellation=noise_cancellation.BVC(),
     )
 

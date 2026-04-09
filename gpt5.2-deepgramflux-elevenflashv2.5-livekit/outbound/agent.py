@@ -282,6 +282,7 @@ async def _entrypoint(ctx) -> None:
     from livekit.agents.pipeline import VoicePipelineAgent
     from livekit.plugins import deepgram, elevenlabs, noise_cancellation
     from livekit.plugins import openai as openai_plugin
+    from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     logger.info(f"Connected to outbound room: {ctx.room.name}")
@@ -320,6 +321,7 @@ async def _entrypoint(ctx) -> None:
     tools = _build_tool_functions()
 
     # Create the voice pipeline agent
+    # Silero VAD for speech presence + MultilingualModel for semantic turn detection
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model="nova-3"),
@@ -330,6 +332,7 @@ async def _entrypoint(ctx) -> None:
         ),
         chat_ctx=initial_ctx,
         fnc_ctx=tools,
+        turn_detector=MultilingualModel(),
         noise_cancellation=noise_cancellation.BVC(),
     )
 

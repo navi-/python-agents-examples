@@ -2,8 +2,12 @@
 Integration tests for GPT-5.2 LiveKit voice agent.
 
 Test Levels:
-1. Unit Tests - Test individual components (audio conversion, phone normalization)
+1. Unit Tests - Test individual components (phone normalization)
 2. Local Integration - Test server endpoints without external services
+
+Note: No audio conversion tests because LiveKit handles all audio transport
+and format conversion natively via its SIP bridge — utils.py only provides
+phone number normalization.
 
 Run tests:
     uv run pytest tests/test_integration.py -v
@@ -15,10 +19,8 @@ Run specific test level:
 
 from __future__ import annotations
 
-import math
 import os
 import signal
-import struct
 import subprocess
 import sys
 import time
@@ -27,8 +29,7 @@ import httpx
 import pytest
 from dotenv import load_dotenv
 
-# Import audio functions from utils module
-from utils import normalize_phone_number, pcm_to_ulaw, ulaw_to_pcm
+from utils import normalize_phone_number
 
 load_dotenv()
 
@@ -46,53 +47,6 @@ LOCAL_HTTP_URL = f"http://localhost:{TEST_PORT}"
 # =============================================================================
 # UNIT TESTS - Test individual components
 # =============================================================================
-
-
-class TestUnitAudioConversion:
-    """Unit tests for audio format conversion."""
-
-    def test_ulaw_to_pcm_conversion(self):
-        """Test mu-law to PCM conversion."""
-        ulaw_silence = b"\xff" * 160
-        pcm_audio = ulaw_to_pcm(ulaw_silence)
-
-        samples = struct.unpack(f"{len(pcm_audio) // 2}h", pcm_audio)
-        avg_amplitude = sum(abs(s) for s in samples) / len(samples)
-
-        assert len(pcm_audio) == 320  # 160 samples * 2 bytes
-        assert avg_amplitude < 100  # Should be near silence
-
-    def test_pcm_to_ulaw_conversion(self):
-        """Test PCM to mu-law conversion."""
-        pcm_silence = b"\x00" * 320
-        ulaw_audio = pcm_to_ulaw(pcm_silence)
-
-        assert len(ulaw_audio) == 160  # Half the size
-
-    def test_audio_roundtrip(self):
-        """Test that audio survives roundtrip conversion."""
-        samples = []
-        for i in range(160):
-            sample = int(16000 * math.sin(2 * math.pi * 440 * i / 8000))
-            samples.append(sample)
-        pcm_original = struct.pack(f"{len(samples)}h", *samples)
-
-        ulaw = pcm_to_ulaw(pcm_original)
-        pcm_restored = ulaw_to_pcm(ulaw)
-
-        original_samples = struct.unpack(f"{len(pcm_original) // 2}h", pcm_original)
-        restored_samples = struct.unpack(f"{len(pcm_restored) // 2}h", pcm_restored)
-
-        # Check correlation (should be > 0.9)
-        correlation = sum(
-            o * r for o, r in zip(original_samples, restored_samples, strict=True)
-        )
-        orig_energy = sum(o * o for o in original_samples)
-        rest_energy = sum(r * r for r in restored_samples)
-
-        if orig_energy > 0 and rest_energy > 0:
-            normalized_corr = correlation / (orig_energy * rest_energy) ** 0.5
-            assert normalized_corr > 0.9, "Audio quality degraded too much"
 
 
 class TestUnitPhoneNormalization:
