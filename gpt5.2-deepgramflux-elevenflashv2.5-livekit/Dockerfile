@@ -23,10 +23,7 @@ COPY utils.py utils.py
 COPY inbound/ inbound/
 COPY outbound/ outbound/
 
-# Expose port for management API
-EXPOSE 8000
-
 # Run the inbound agent worker by default
-# Override with "python -m inbound.server" for the management server
-# Or "python -m outbound.agent start" for outbound agent
+# Override with "python -m outbound.agent start" for outbound
+# Override with "python -m outbound.server" for outbound management API
 CMD ["uv", "run", "python", "-m", "inbound.agent", "start"]

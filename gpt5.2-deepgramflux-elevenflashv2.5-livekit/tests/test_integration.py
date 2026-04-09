@@ -2,17 +2,14 @@
 Integration tests for GPT-5.2 LiveKit voice agent.
 
 Test Levels:
-1. Unit Tests - Test individual components (phone normalization)
-2. Local Integration - Test server endpoints without external services
+1. Unit Tests - Phone normalization (offline, no API keys)
+2. Local Integration - Optional server health check
 
-Note: No audio conversion tests because LiveKit handles all audio transport
-and format conversion natively via its SIP bridge — utils.py only provides
-phone number normalization.
+Note: No audio conversion tests — LiveKit handles all audio transport
+natively via SIP bridge. No WebSocket tests — LiveKit handles audio
+through rooms, not direct WebSocket.
 
-Run tests:
-    uv run pytest tests/test_integration.py -v
-
-Run specific test level:
+Run:
     uv run pytest tests/test_integration.py -v -k "unit"
     uv run pytest tests/test_integration.py -v -k "local"
 """
@@ -33,19 +30,12 @@ from utils import normalize_phone_number
 
 load_dotenv()
 
-# Configuration from environment
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
-ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY", "")
-PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
-PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
-
 TEST_PORT = 18001
 LOCAL_HTTP_URL = f"http://localhost:{TEST_PORT}"
 
 
 # =============================================================================
-# UNIT TESTS - Test individual components
+# UNIT TESTS
 # =============================================================================
 
 
@@ -53,24 +43,75 @@ class TestUnitPhoneNormalization:
     """Unit tests for phone number normalization."""
 
     def test_normalize_e164_format(self):
-        """Test normalizing E.164 formatted numbers."""
         result = normalize_phone_number("+16572338892")
         assert result == "16572338892"
 
     def test_normalize_with_spaces(self):
-        """Test normalizing numbers with spaces."""
         result = normalize_phone_number("+1 657-233-8892")
         assert result == "16572338892"
 
     def test_normalize_local_format(self):
-        """Test normalizing local format numbers."""
         result = normalize_phone_number("(657) 233-8892", "US")
         assert result == "16572338892"
 
     def test_normalize_empty(self):
-        """Test normalizing empty string."""
         result = normalize_phone_number("")
         assert result == ""
+
+    def test_normalize_international(self):
+        result = normalize_phone_number("+442071234567")
+        assert result == "442071234567"
+
+
+class TestUnitCallManager:
+    """Unit tests for outbound CallManager."""
+
+    def test_create_call(self):
+        from outbound.agent import CallManager
+
+        mgr = CallManager()
+        record = mgr.create_call(
+            phone_number="+15551234567",
+            campaign_id="test-campaign",
+            opening_reason="Follow up on demo request",
+            objective="Schedule a demo",
+        )
+        assert record.phone_number == "+15551234567"
+        assert record.campaign_id == "test-campaign"
+        assert record.status == "initiating"
+        assert "demo request" in record.initial_message
+        assert "{{opening_reason}}" not in record.system_prompt
+
+    def test_update_status(self):
+        from outbound.agent import CallManager
+
+        mgr = CallManager()
+        record = mgr.create_call(phone_number="+15551234567")
+        mgr.update_status(record.call_id, "ringing", livekit_room_name="outbound-123")
+        updated = mgr.get_call(record.call_id)
+        assert updated.status == "ringing"
+        assert updated.livekit_room_name == "outbound-123"
+
+    def test_get_active_calls(self):
+        from outbound.agent import CallManager
+
+        mgr = CallManager()
+        r1 = mgr.create_call(phone_number="+15551111111")
+        r2 = mgr.create_call(phone_number="+15552222222")
+        mgr.update_status(r1.call_id, "completed")
+        active = mgr.get_active_calls()
+        assert len(active) == 1
+        assert active[0].call_id == r2.call_id
+
+    def test_campaign_filter(self):
+        from outbound.agent import CallManager
+
+        mgr = CallManager()
+        mgr.create_call(phone_number="+15551111111", campaign_id="A")
+        mgr.create_call(phone_number="+15552222222", campaign_id="B")
+        mgr.create_call(phone_number="+15553333333", campaign_id="A")
+        assert len(mgr.get_calls_by_campaign("A")) == 2
+        assert len(mgr.get_calls_by_campaign("B")) == 1
 
 
 # =============================================================================
@@ -79,17 +120,17 @@ class TestUnitPhoneNormalization:
 
 
 class TestLocalIntegration:
-    """Integration tests using local server endpoints."""
+    """Integration tests for the outbound management server."""
 
     @pytest.fixture(scope="class")
     def server_process(self):
-        """Start the inbound server as a subprocess."""
+        """Start the outbound server as a subprocess."""
         env = os.environ.copy()
         env["SERVER_PORT"] = str(TEST_PORT)
 
         project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         proc = subprocess.Popen(
-            [sys.executable, "-m", "inbound.server"],
+            [sys.executable, "-m", "outbound.server"],
             cwd=project_dir,
             env=env,
             stdout=subprocess.PIPE,
@@ -124,62 +165,30 @@ class TestLocalIntegration:
 
     @pytest.mark.asyncio
     async def test_local_health_check(self, server_process):
-        """Test the health check endpoint."""
         async with httpx.AsyncClient() as client:
             response = await client.get(LOCAL_HTTP_URL)
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "ok"
-            assert "gpt5.2-deepgramflux-elevenflashv2.5-livekit" in data["service"]
+            assert "livekit" in data["service"]
 
     @pytest.mark.asyncio
-    async def test_local_answer_webhook(self, server_process):
-        """Test the answer webhook returns valid XML."""
+    async def test_outbound_call_missing_number(self, server_process):
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{LOCAL_HTTP_URL}/answer",
-                params={
-                    "CallUUID": "test123",
-                    "From": "+15551234567",
-                    "To": "+16572338892",
-                },
+            response = await client.post(f"{LOCAL_HTTP_URL}/outbound/call")
+            assert response.status_code == 200
+            data = response.json()
+            assert "error" in data
+
+    @pytest.mark.asyncio
+    async def test_outbound_status_not_found(self, server_process):
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{LOCAL_HTTP_URL}/outbound/status/nonexistent-id"
             )
             assert response.status_code == 200
-            assert "application/xml" in response.headers["content-type"]
-            # Without LIVEKIT_SIP_URI, should return a fallback message
-            assert "<Speak" in response.text or "<Dial" in response.text
-
-    @pytest.mark.asyncio
-    async def test_local_hangup_webhook(self, server_process):
-        """Test the hangup webhook."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{LOCAL_HTTP_URL}/hangup",
-                data={
-                    "CallUUID": "test123",
-                    "Duration": "30",
-                    "HangupCause": "NORMAL_CLEARING",
-                },
-            )
-            assert response.status_code == 200
-
-    @pytest.mark.asyncio
-    async def test_local_fallback_webhook(self, server_process):
-        """Test the fallback webhook."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{LOCAL_HTTP_URL}/fallback")
-            assert response.status_code == 200
-            assert "application/xml" in response.headers["content-type"]
-            assert "<Speak" in response.text
-
-    @pytest.mark.asyncio
-    async def test_local_hold_webhook(self, server_process):
-        """Test the hold webhook."""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{LOCAL_HTTP_URL}/hold")
-            assert response.status_code == 200
-            assert "application/xml" in response.headers["content-type"]
-            assert "<Wait" in response.text
+            data = response.json()
+            assert data["error"] == "Call not found"
 
 
 if __name__ == "__main__":
