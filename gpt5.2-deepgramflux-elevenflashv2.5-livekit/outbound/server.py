@@ -1,7 +1,7 @@
 """FastAPI management server for outbound calls via LiveKit SIP.
 
-Handles outbound call initiation via LiveKit's SIP API, Plivo webhook
-integration, and call lifecycle management.
+On startup, auto-configures:
+1. LiveKit outbound SIP trunk (with Plivo SIP credentials for dialing)
 
 The agent worker must be started separately:
     uv run python -m outbound.agent dev
@@ -9,6 +9,7 @@ The agent worker must be started separately:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime
@@ -36,6 +37,12 @@ PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
+
+# Plivo SIP endpoint for outbound trunk
+# Format: sip.plivo.com or your regional endpoint
+PLIVO_SIP_DOMAIN = os.getenv("PLIVO_SIP_DOMAIN", "sip.plivo.com")
+
+# Populated at startup by configure_livekit_outbound_sip() or from env
 LIVEKIT_SIP_TRUNK_ID = os.getenv("LIVEKIT_SIP_TRUNK_ID", "")
 
 app = FastAPI(
@@ -45,6 +52,91 @@ app = FastAPI(
 )
 
 call_manager = CallManager()
+
+
+# =============================================================================
+# LiveKit SIP Auto-Configuration
+# =============================================================================
+
+
+async def configure_livekit_outbound_sip() -> bool:
+    """Create or reuse a LiveKit outbound SIP trunk for Plivo.
+
+    The outbound trunk tells LiveKit how to dial phone numbers through
+    Plivo's SIP endpoint using Plivo auth credentials.
+
+    Returns True if the trunk is ready, sets LIVEKIT_SIP_TRUNK_ID.
+    """
+    global LIVEKIT_SIP_TRUNK_ID
+
+    if not all([LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET]):
+        logger.warning("Skipping LiveKit outbound SIP auto-config. Missing LiveKit credentials.")
+        return False
+
+    if not all([PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN]):
+        logger.warning(
+            "Skipping LiveKit outbound SIP auto-config. "
+            "Missing PLIVO_AUTH_ID or PLIVO_AUTH_TOKEN (needed as SIP credentials)."
+        )
+        return False
+
+    try:
+        from livekit.api import LiveKitAPI
+        from livekit.protocol.sip import (
+            CreateSIPOutboundTrunkRequest,
+            ListSIPOutboundTrunkRequest,
+            SIPOutboundTrunkInfo,
+        )
+
+        lk_api = LiveKitAPI(
+            url=LIVEKIT_URL,
+            api_key=LIVEKIT_API_KEY,
+            api_secret=LIVEKIT_API_SECRET,
+        )
+
+        trunk_name = "plivo-outbound-gpt52"
+        phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
+
+        # Check if outbound trunk already exists
+        existing_trunks = await lk_api.sip.list_sip_outbound_trunk(
+            ListSIPOutboundTrunkRequest()
+        )
+        trunk_id = ""
+        for trunk in existing_trunks.items:
+            if trunk.name == trunk_name:
+                trunk_id = trunk.sip_trunk_id
+                logger.info(f"Reusing existing outbound SIP trunk: {trunk_id}")
+                break
+
+        if not trunk_id:
+            # Create outbound trunk with Plivo SIP credentials
+            trunk_info = SIPOutboundTrunkInfo(
+                name=trunk_name,
+                address=PLIVO_SIP_DOMAIN,
+                numbers=[f"+{phone}"] if phone else [],
+                auth_username=PLIVO_AUTH_ID,
+                auth_password=PLIVO_AUTH_TOKEN,
+                transport=1,  # SIP_TRANSPORT_UDP
+            )
+            result = await lk_api.sip.create_sip_outbound_trunk(
+                CreateSIPOutboundTrunkRequest(trunk=trunk_info)
+            )
+            trunk_id = result.sip_trunk_id
+            logger.info(f"Created outbound SIP trunk: {trunk_id}")
+
+        LIVEKIT_SIP_TRUNK_ID = trunk_id
+
+        await lk_api.aclose()
+
+        logger.info(
+            f"LiveKit outbound SIP configured: trunk_id={trunk_id}, "
+            f"address={PLIVO_SIP_DOMAIN}"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to configure LiveKit outbound SIP: {e}")
+        return False
 
 
 # =============================================================================
@@ -61,6 +153,7 @@ async def health_check() -> dict:
         "service": "gpt5.2-deepgramflux-elevenflashv2.5-livekit-outbound",
         "phone_number": f"+{phone}" if phone else "not configured",
         "livekit_url": LIVEKIT_URL or "not configured",
+        "sip_trunk_id": LIVEKIT_SIP_TRUNK_ID or "not configured",
     }
 
 
@@ -76,8 +169,8 @@ async def outbound_initiate(
     """Initiate an outbound call via LiveKit SIP.
 
     Creates a call record, then uses LiveKit's SIP API to place a call
-    through the configured SIP trunk (Plivo). The outbound agent worker
-    auto-joins the room when the SIP participant connects.
+    through the configured outbound SIP trunk (Plivo). The outbound agent
+    worker auto-joins the room when the SIP participant connects.
     """
     if not phone_number:
         return {"error": "phone_number is required"}
@@ -86,7 +179,7 @@ async def outbound_initiate(
         return {"error": "LiveKit credentials not configured"}
 
     if not LIVEKIT_SIP_TRUNK_ID:
-        return {"error": "LIVEKIT_SIP_TRUNK_ID not configured"}
+        return {"error": "LIVEKIT_SIP_TRUNK_ID not configured — run server to auto-create"}
 
     record = call_manager.create_call(
         phone_number=phone_number,
@@ -296,6 +389,10 @@ async def hold_webhook() -> Response:
 def main() -> None:
     """Run the outbound management server.
 
+    On startup:
+    1. Creates LiveKit outbound SIP trunk with Plivo credentials (if not exists)
+    2. Starts the FastAPI management server
+
     NOTE: The LiveKit agent worker must also be started separately:
         uv run python -m outbound.agent dev
     """
@@ -303,8 +400,15 @@ def main() -> None:
         f"Starting LiveKit Outbound Voice Agent server on port {SERVER_PORT}"
     )
 
-    if not LIVEKIT_URL:
+    # Auto-configure LiveKit outbound SIP trunk
+    if LIVEKIT_URL and LIVEKIT_API_KEY and LIVEKIT_API_SECRET:
+        logger.info("Configuring LiveKit outbound SIP trunk...")
+        asyncio.run(configure_livekit_outbound_sip())
+    else:
         logger.warning("LIVEKIT_URL not set. Outbound calls will fail.")
+
+    if not LIVEKIT_SIP_TRUNK_ID:
+        logger.warning("No outbound SIP trunk ID. Cannot place outbound calls.")
 
     logger.info(
         "Remember to start the agent worker: uv run python -m outbound.agent dev"
