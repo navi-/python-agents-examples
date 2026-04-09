@@ -265,9 +265,19 @@ def run_agent() -> None:
     # One-time SIP trunk + dispatch rule setup
     trunk_id = asyncio.run(setup_sip_inbound())
     if trunk_id:
+        # Derive the SIP URI from the LiveKit URL
+        # wss://myproject.livekit.cloud → myproject.livekit.cloud
+        lk_host = LIVEKIT_URL.replace("wss://", "").replace("ws://", "").rstrip("/")
+        sip_uri = f"{trunk_id}.sip.{lk_host}"
         logger.info(f"SIP trunk ready: {trunk_id}")
+        logger.info("")
+        logger.info("  Configure Plivo Zentrunk inbound trunk to point to:")
+        logger.info(f"  {sip_uri};transport=tcp")
+        logger.info("")
     else:
-        logger.warning("SIP trunk not configured — agent will still start but no calls will route")
+        logger.warning(
+            "SIP trunk not configured — agent will still start but no calls will route"
+        )
 
     from livekit.agents import WorkerOptions, cli
 
