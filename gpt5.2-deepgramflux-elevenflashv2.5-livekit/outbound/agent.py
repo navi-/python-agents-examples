@@ -3,10 +3,9 @@
 Self-contained: creates the outbound SIP trunk on startup, provides
 initiate_call() to trigger calls, and runs the agent worker.
 
-No separate server required. Calls can be triggered via:
+Calls can be triggered via:
 1. initiate_call() from Python code
-2. The optional server.py HTTP wrapper
-3. Directly via LiveKit API (CreateSIPParticipantRequest)
+2. Directly via LiveKit API (CreateSIPParticipantRequest)
 
 Usage:
     uv run python -m outbound.agent dev
@@ -389,7 +388,7 @@ async def _entrypoint(ctx) -> None:
 # Public API
 # =============================================================================
 
-# Module-level CallManager shared by initiate_call() and the optional server
+# Module-level CallManager shared across initiate_call() callers
 call_manager = CallManager()
 
 
@@ -405,8 +404,7 @@ async def initiate_call(
     Creates a call record and a SIP participant that dials through
     the outbound trunk. The agent worker auto-joins the room.
 
-    Can be called from Python code, the optional server.py, or any
-    async context. No HTTP server required.
+    Can be called from any async context — no HTTP server required.
 
     Returns:
         Dict with call_id, status, room_name on success, or error.

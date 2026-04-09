@@ -1,9 +1,9 @@
 # GPT-5.2 Mini + Deepgram Flux + ElevenLabs Flash v2.5 — LiveKit Voice Agent
 
-LiveKit Agents framework orchestration with Plivo SIP trunking. Plivo forwards inbound calls via SIP directly to LiveKit — no webhook server needed. LiveKit's dispatch rule routes each caller to a unique room where a `VoicePipelineAgent` runs the STT-LLM-TTS pipeline. STT is Deepgram Flux (`/listen/v2` WebSocket, streaming transcription optimized for conversational audio). LLM is OpenAI `gpt-5.2-mini` via Responses API with 5 function tools. TTS is ElevenLabs `eleven_flash_v2_5` (low-latency streaming synthesis). Turn detection uses Silero VAD (speech presence, barge-in trigger) + LiveKit MultilingualModel (135M transformer, semantic end-of-turn prediction on partial transcripts in a 4-turn sliding window). Noise cancellation is Krisp BVC (background voice cancellation, applied to inbound audio before STT). LiveKit handles all audio transport, format conversion, and interruption management natively — no mu-law conversion or WebSocket handling in application code.
+LiveKit Agents framework orchestration with Plivo SIP trunking. Plivo forwards inbound calls via SIP directly to LiveKit — no webhook server needed. LiveKit's dispatch rule routes each caller to a unique room where a `VoicePipelineAgent` runs the STT-LLM-TTS pipeline. STT is Deepgram Flux (`/listen/v2` WebSocket, streaming transcription optimized for conversational audio). LLM is OpenAI `gpt-5.2-mini` via Responses API with 5 function tools. TTS is ElevenLabs `eleven_flash_v2_5` (low-latency streaming synthesis). Turn detection uses Silero VAD (speech presence, barge-in trigger) + LiveKit MultilingualModel (135M transformer, semantic end-of-turn prediction on partial transcripts in a 4-turn sliding window). Noise cancellation is Krisp BVC (background voice cancellation, applied to inbound audio before STT). LiveKit handles all audio transport, format conversion, and interruption management natively — no mu-law conversion, WebSocket handling, or HTTP webhooks in application code.
 
-- Inbound calls need only the agent worker — SIP trunk and dispatch rule are auto-created on startup, Plivo routes directly to LiveKit, no `/answer` or `/hangup` webhooks required
-- Outbound calls use LiveKit's SIP API (`CreateSIPParticipantRequest`) to dial through a Plivo Zentrunk outbound SIP trunk, with call metadata (system prompt, initial message) passed via room metadata JSON
+- Inbound: one process (`python -m inbound.agent dev`) — SIP trunk and dispatch rule auto-created on startup, Plivo routes directly to LiveKit, no `/answer` or `/hangup` webhooks
+- Outbound: one process (`python -m outbound.agent dev`) — calls triggered via `initiate_call()` or directly via LiveKit API (`CreateSIPParticipantRequest`), call metadata passed via room metadata JSON
 - Barge-in handled by `VoicePipelineAgent` with `allow_interruptions=True` — Silero VAD detects speech onset, pipeline cancels in-flight TTS
 
 ## Pipeline Architecture
@@ -50,7 +50,7 @@ LiveKit Agents framework orchestration with Plivo SIP trunking. Plivo forwards i
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) package manager
-- LiveKit server — [LiveKit Cloud](https://cloud.livekit.io/) (free tier) or [self-hosted](https://docs.livekit.io/home/self-hosting/local/)
+- LiveKit — [LiveKit Cloud](https://cloud.livekit.io/) (free tier) or [self-hosted](https://docs.livekit.io/home/self-hosting/local/)
 - OpenAI, Deepgram, ElevenLabs API keys
 - Plivo account with Zentrunk SIP trunking
 
@@ -83,42 +83,27 @@ In the Plivo Console:
 uv run python -m inbound.agent dev
 ```
 
-That's it. The agent:
-1. Creates a LiveKit inbound SIP trunk (with Krisp enabled)
-2. Creates a dispatch rule (individual rooms per call)
-3. Starts the worker — auto-joins rooms when callers connect
-
-### 5. Call your Plivo number
-
-The call routes: Phone → Plivo Zentrunk → SIP → LiveKit → Agent.
+That's it. The agent auto-creates the LiveKit SIP trunk + dispatch rule and starts processing calls.
 
 ## Outbound Calls
 
-### Start the outbound agent worker
+### Run the outbound agent
 
 ```bash
 uv run python -m outbound.agent dev
 ```
 
-### Start the outbound management API (separate terminal)
+### Trigger a call from Python
 
-```bash
-uv run python -m outbound.server
-```
+```python
+from outbound.agent import initiate_call
 
-### Initiate a call
-
-```bash
-curl -X POST "http://localhost:8000/outbound/call?\
-phone_number=+15551234567&\
-opening_reason=Follow%20up%20on%20your%20demo%20request&\
-objective=Schedule%20a%20product%20demo"
-```
-
-### Check status
-
-```bash
-curl "http://localhost:8000/outbound/status/{call_id}"
+result = await initiate_call(
+    phone_number="+15551234567",
+    opening_reason="Follow up on your demo request",
+    objective="Schedule a product demo",
+)
+print(result)  # {"call_id": "...", "status": "ringing", "room_name": "..."}
 ```
 
 ## Project Structure
@@ -127,11 +112,9 @@ curl "http://localhost:8000/outbound/status/{call_id}"
 gpt5.2-deepgramflux-elevenflashv2.5-livekit/
 ├── inbound/
 │   ├── agent.py              # Agent worker + SIP setup (all you need)
-│   ├── server.py             # Optional health check
 │   └── system_prompt.md
 ├── outbound/
-│   ├── agent.py              # Agent worker + CallManager + SIP setup
-│   ├── server.py             # Call initiation API
+│   ├── agent.py              # Agent worker + CallManager + initiate_call()
 │   └── system_prompt.md
 ├── utils.py                  # Phone normalization
 ├── tests/
@@ -141,11 +124,11 @@ gpt5.2-deepgramflux-elevenflashv2.5-livekit/
 └── README.md
 ```
 
-**Key difference from Pipecat/native examples**: No `/answer`, `/hangup`, or `/ws` webhooks. LiveKit handles all call routing via SIP — the agent worker is the only process needed for inbound.
+No `/answer`, `/hangup`, or `/ws` webhooks. No HTTP server. LiveKit handles all call routing via SIP.
 
 ## Local Development
 
-LiveKit always requires a server. Options:
+LiveKit requires a server to connect to:
 
 1. **LiveKit Cloud** (recommended): Free tier at [cloud.livekit.io](https://cloud.livekit.io). Set `LIVEKIT_URL=wss://your-project.livekit.cloud`
 2. **Self-hosted**: Run `livekit-server` locally. Set `LIVEKIT_URL=ws://localhost:7880`. See [local setup guide](https://docs.livekit.io/home/self-hosting/local/)
@@ -154,10 +137,7 @@ LiveKit always requires a server. Options:
 
 ```bash
 # Unit tests (offline, no API keys)
-uv run pytest tests/test_integration.py -v -k "unit"
-
-# Local integration (starts outbound server, tests endpoints)
-uv run pytest tests/test_integration.py -v -k "local"
+uv run pytest tests/test_integration.py -v
 
 # E2E with LiveKit (requires LiveKit credentials)
 uv run pytest tests/test_e2e_live.py -v

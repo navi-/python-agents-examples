@@ -2,7 +2,7 @@
 Outbound call test — initiates and verifies an outbound call.
 
 Requires:
-- Running outbound server + agent worker
+- Running outbound agent worker
 - Plivo credentials and phone number
 - LiveKit SIP trunk configured
 - A valid destination phone number

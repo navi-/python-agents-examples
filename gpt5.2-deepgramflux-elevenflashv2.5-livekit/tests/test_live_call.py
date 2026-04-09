@@ -2,7 +2,7 @@
 Live inbound call test — places a real call to verify greeting.
 
 Requires:
-- Running inbound server + agent worker
+- Running inbound agent worker
 - Plivo credentials and phone number
 - LiveKit SIP trunk configured
 - ngrok tunnel (or public URL)

@@ -2,7 +2,7 @@
 Multi-turn conversation test — verifies barge-in and turn-taking.
 
 Requires:
-- Running inbound server + agent worker
+- Running inbound agent worker
 - Plivo credentials and phone number
 - LiveKit SIP trunk configured
 
