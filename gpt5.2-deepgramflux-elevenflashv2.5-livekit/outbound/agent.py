@@ -1,15 +1,15 @@
-"""Outbound voice agent — LiveKit VoicePipelineAgent + call state management.
+"""Outbound voice agent — LiveKit VoicePipelineAgent + call management.
 
-On startup, creates a LiveKit outbound SIP trunk with Plivo credentials.
-The server.py triggers outbound calls via CreateSIPParticipantRequest.
+Self-contained: creates the outbound SIP trunk on startup, provides
+initiate_call() to trigger calls, and runs the agent worker.
+
+No separate server required. Calls can be triggered via:
+1. initiate_call() from Python code
+2. The optional server.py HTTP wrapper
+3. Directly via LiveKit API (CreateSIPParticipantRequest)
 
 Usage:
     uv run python -m outbound.agent dev
-
-Status state machine:
-    initiating -> ringing -> connected -> completed
-                         |-> no_answer
-                |-> failed
 """
 
 from __future__ import annotations
@@ -388,6 +388,102 @@ async def _entrypoint(ctx) -> None:
 # =============================================================================
 # Public API
 # =============================================================================
+
+# Module-level CallManager shared by initiate_call() and the optional server
+call_manager = CallManager()
+
+
+async def initiate_call(
+    phone_number: str,
+    campaign_id: str = "",
+    opening_reason: str = "",
+    objective: str = "",
+    context: str = "",
+) -> dict:
+    """Initiate an outbound call via LiveKit SIP.
+
+    Creates a call record and a SIP participant that dials through
+    the outbound trunk. The agent worker auto-joins the room.
+
+    Can be called from Python code, the optional server.py, or any
+    async context. No HTTP server required.
+
+    Returns:
+        Dict with call_id, status, room_name on success, or error.
+    """
+    import json
+
+    from utils import normalize_phone_number
+
+    if not all([LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET]):
+        return {"error": "LiveKit credentials not configured"}
+
+    trunk_id = OUTBOUND_TRUNK_ID
+    if not trunk_id:
+        return {"error": "Outbound SIP trunk not configured — start agent worker first"}
+
+    record = call_manager.create_call(
+        phone_number=phone_number,
+        campaign_id=campaign_id,
+        opening_reason=opening_reason,
+        objective=objective,
+        context=context,
+    )
+
+    try:
+        from livekit.api import LiveKitAPI
+        from livekit.protocol.sip import CreateSIPParticipantRequest
+
+        lk_api = LiveKitAPI(
+            url=LIVEKIT_URL,
+            api_key=LIVEKIT_API_KEY,
+            api_secret=LIVEKIT_API_SECRET,
+        )
+
+        to_number = normalize_phone_number(phone_number)
+        room_name = f"outbound-{record.call_id}"
+
+        room_metadata = json.dumps({
+            "call_id": record.call_id,
+            "system_prompt": record.system_prompt,
+            "initial_message": record.initial_message,
+            "is_outbound": True,
+        })
+
+        await lk_api.sip.create_sip_participant(
+            CreateSIPParticipantRequest(
+                sip_trunk_id=trunk_id,
+                sip_call_to=f"+{to_number}",
+                room_name=room_name,
+                participant_identity=f"sip-{to_number}",
+                participant_name=f"Caller +{to_number}",
+                room_meta=room_metadata,
+            )
+        )
+
+        call_manager.update_status(
+            record.call_id, "ringing",
+            livekit_room_name=room_name,
+        )
+
+        logger.info(
+            f"Outbound call initiated: call_id={record.call_id}, "
+            f"to=+{to_number}, room={room_name}"
+        )
+
+        await lk_api.aclose()
+
+        return {
+            "call_id": record.call_id,
+            "status": "ringing",
+            "phone_number": phone_number,
+            "room_name": room_name,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to initiate outbound call: {e}")
+        call_manager.update_status(record.call_id, "failed", outcome="failed")
+        return {"error": str(e), "call_id": record.call_id}
 
 
 def run_agent() -> None:
