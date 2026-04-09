@@ -38,9 +38,9 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 
-# Plivo SIP endpoint for outbound trunk
-# Format: sip.plivo.com or your regional endpoint
-PLIVO_SIP_DOMAIN = os.getenv("PLIVO_SIP_DOMAIN", "sip.plivo.com")
+# Plivo Zentrunk termination SIP domain for outbound calls
+# Format: XXXXXXX.zt.plivo.com (from Plivo Console → Zentrunk → Outbound Trunks)
+PLIVO_SIP_DOMAIN = os.getenv("PLIVO_SIP_DOMAIN", "")
 
 # Populated at startup by configure_livekit_outbound_sip() or from env
 LIVEKIT_SIP_TRUNK_ID = os.getenv("LIVEKIT_SIP_TRUNK_ID", "")
@@ -73,10 +73,17 @@ async def configure_livekit_outbound_sip() -> bool:
         logger.warning("Skipping LiveKit outbound SIP auto-config. Missing LiveKit credentials.")
         return False
 
-    if not all([PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN]):
+    if not all([PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_SIP_DOMAIN]):
+        missing = []
+        if not PLIVO_AUTH_ID:
+            missing.append("PLIVO_AUTH_ID")
+        if not PLIVO_AUTH_TOKEN:
+            missing.append("PLIVO_AUTH_TOKEN")
+        if not PLIVO_SIP_DOMAIN:
+            missing.append("PLIVO_SIP_DOMAIN")
         logger.warning(
-            "Skipping LiveKit outbound SIP auto-config. "
-            "Missing PLIVO_AUTH_ID or PLIVO_AUTH_TOKEN (needed as SIP credentials)."
+            f"Skipping LiveKit outbound SIP auto-config. Missing: {', '.join(missing)}. "
+            "PLIVO_SIP_DOMAIN is your Zentrunk termination domain (XXXXXXX.zt.plivo.com)."
         )
         return False
 
