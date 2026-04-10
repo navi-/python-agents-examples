@@ -34,6 +34,10 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 
+# LiveKit SIP endpoint — per-project, found in LiveKit Cloud Project Settings
+# Format: {project_id}.sip.livekit.cloud (e.g., vjnxecm0tjk.sip.livekit.cloud)
+LIVEKIT_SIP_ENDPOINT = os.getenv("LIVEKIT_SIP_ENDPOINT", "")
+
 # Plivo configuration
 PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
@@ -142,9 +146,17 @@ async def setup_sip_inbound() -> bool:
 
         await lk_api.aclose()
 
-        # 3. Derive LiveKit SIP URI
-        lk_host = LIVEKIT_URL.replace("wss://", "").replace("ws://", "").rstrip("/")
-        lk_sip_uri = f"{lk_trunk_id}.sip.{lk_host};transport=tcp"
+        # 3. LiveKit SIP endpoint (per-project, from Project Settings)
+        if not LIVEKIT_SIP_ENDPOINT:
+            logger.warning(
+                "[LiveKit] LIVEKIT_SIP_ENDPOINT not set. "
+                "Find it in LiveKit Cloud → Project Settings → SIP URI. "
+                "Format: {project_id}.sip.livekit.cloud"
+            )
+            await lk_api.aclose()
+            return True  # LiveKit trunk created, but can't configure Plivo without endpoint
+
+        lk_sip_uri = f"{LIVEKIT_SIP_ENDPOINT};transport=tcp"
         logger.info(f"[LiveKit] SIP endpoint: {lk_sip_uri}")
 
     except Exception as e:
