@@ -3,6 +3,7 @@
 Each component declares:
 - name / short_name: for directory naming
 - provider: the company behind it
+- model_series / series_slug: groups related models for docs (e.g. "GPT-4.1" / "gpt-4.1")
 - api_style: websocket | http | sdk
 - api_version: tracks breaking API changes between model generations
 - integration_notes: documents API-level differences from other models in same provider
@@ -23,6 +24,8 @@ class LLMComponent(BaseModel):
     name: str  # e.g. "gpt-4.1-mini"
     short_name: str  # e.g. "gpt4.1mini" — used in directory naming
     provider: str  # e.g. "openai"
+    model_series: str  # e.g. "GPT-4.1" — human-readable series name for docs
+    series_slug: str  # e.g. "gpt-4.1" — URL-safe slug for docs paths
     api_style: str  # "http" | "websocket" | "sdk"
     api_version: str = ""  # e.g. "chat-v1", "chat-v2" — tracks breaking API changes
     streaming: bool = True
@@ -43,6 +46,8 @@ class STTComponent(BaseModel):
     name: str  # e.g. "deepgram"
     short_name: str  # e.g. "deepgram"
     provider: str
+    model_series: str  # e.g. "Nova 3"
+    series_slug: str  # e.g. "nova-3"
     api_style: str  # "websocket" | "http"
     api_version: str = ""  # tracks breaking changes between model generations
     input_sample_rate: int  # what sample rate it accepts
@@ -62,6 +67,8 @@ class TTSComponent(BaseModel):
     name: str  # e.g. "elevenlabs"
     short_name: str  # e.g. "elevenlabs"
     provider: str
+    model_series: str  # e.g. "ElevenLabs v1"
+    series_slug: str  # e.g. "v1"
     api_style: str  # "websocket" | "http"
     api_version: str = ""
     output_sample_rate: int  # what sample rate it produces
@@ -81,6 +88,8 @@ class VoiceNativeComponent(BaseModel):
     name: str  # e.g. "grok-voice"
     short_name: str  # e.g. "grok-voice"
     provider: str
+    model_series: str  # e.g. "Grok Voice"
+    series_slug: str  # e.g. "grok-voice"
     api_style: str  # "websocket"
     api_version: str = ""
     input_sample_rate: int
@@ -114,6 +123,8 @@ LLMS: dict[str, LLMComponent] = {
         name="GPT-4.1 Mini",
         short_name="gpt4.1mini",
         provider="openai",
+        model_series="GPT-4.1",
+        series_slug="gpt-4.1",
         api_style="http",
         api_version="chat-v1",
         env_vars=["OPENAI_API_KEY"],
@@ -131,6 +142,8 @@ LLMS: dict[str, LLMComponent] = {
         name="GPT-4.1",
         short_name="gpt4.1",
         provider="openai",
+        model_series="GPT-4.1",
+        series_slug="gpt-4.1",
         api_style="http",
         api_version="chat-v1",
         env_vars=["OPENAI_API_KEY"],
@@ -148,6 +161,8 @@ LLMS: dict[str, LLMComponent] = {
         name="GPT-5.4 Mini",
         short_name="gpt5.4mini",
         provider="openai",
+        model_series="GPT-5.4",
+        series_slug="gpt-5.4",
         api_style="http",
         api_version="chat-v2",
         env_vars=["OPENAI_API_KEY"],
@@ -165,6 +180,8 @@ LLMS: dict[str, LLMComponent] = {
         name="Claude Sonnet 4.6",
         short_name="claude-sonnet",
         provider="anthropic",
+        model_series="Claude 4",
+        series_slug="claude-4",
         api_style="http",
         api_version="messages-v1",
         env_vars=["ANTHROPIC_API_KEY"],
@@ -183,6 +200,8 @@ LLMS: dict[str, LLMComponent] = {
         name="Claude Haiku 4.5",
         short_name="claude-haiku",
         provider="anthropic",
+        model_series="Claude 4",
+        series_slug="claude-4",
         api_style="http",
         api_version="messages-v1",
         env_vars=["ANTHROPIC_API_KEY"],
@@ -198,6 +217,8 @@ LLMS: dict[str, LLMComponent] = {
         name="Gemini 2.0 Flash",
         short_name="gemini",
         provider="google",
+        model_series="Gemini 2.0",
+        series_slug="gemini-2.0",
         api_style="http",
         api_version="genai-v1",
         env_vars=["GOOGLE_API_KEY"],
@@ -215,6 +236,8 @@ LLMS: dict[str, LLMComponent] = {
         name="Grok",
         short_name="grok",
         provider="xai",
+        model_series="Grok 3",
+        series_slug="grok-3",
         api_style="http",
         api_version="openai-compat-v1",
         env_vars=["XAI_API_KEY"],
@@ -234,6 +257,8 @@ STTS: dict[str, STTComponent] = {
         name="Deepgram",
         short_name="deepgram",
         provider="deepgram",
+        model_series="Nova 3",
+        series_slug="nova-3",
         api_style="websocket",
         api_version="v1-listen",
         input_sample_rate=8000,
@@ -255,6 +280,8 @@ STTS: dict[str, STTComponent] = {
         name="Sarvam.ai",
         short_name="sarvam",
         provider="sarvam",
+        model_series="Saaras v3",
+        series_slug="saaras-v3",
         api_style="websocket",
         api_version="v1-stream",
         input_sample_rate=8000,
@@ -275,6 +302,8 @@ STTS: dict[str, STTComponent] = {
         name="OpenAI Whisper",
         short_name="whisper",
         provider="openai",
+        model_series="Whisper 1",
+        series_slug="whisper-1",
         api_style="http",
         api_version="v1-audio",
         input_sample_rate=16000,
@@ -295,6 +324,8 @@ STTS: dict[str, STTComponent] = {
         name="Google Cloud STT",
         short_name="googlestt",
         provider="google",
+        model_series="Cloud STT v2",
+        series_slug="cloud-stt-v2",
         api_style="websocket",
         api_version="v2-streaming",
         input_sample_rate=8000,
@@ -315,6 +346,8 @@ TTSS: dict[str, TTSComponent] = {
         name="ElevenLabs",
         short_name="elevenlabs",
         provider="elevenlabs",
+        model_series="ElevenLabs WS",
+        series_slug="ws-streaming",
         api_style="websocket",
         api_version="ws-stream-input",
         output_sample_rate=24000,
@@ -338,6 +371,8 @@ TTSS: dict[str, TTSComponent] = {
         name="OpenAI TTS",
         short_name="openaitts",
         provider="openai",
+        model_series="OpenAI TTS",
+        series_slug="tts",
         api_style="websocket",
         api_version="v1-audio-speech",
         output_sample_rate=24000,
@@ -356,6 +391,8 @@ TTSS: dict[str, TTSComponent] = {
         name="Grok TTS",
         short_name="groktts",
         provider="xai",
+        model_series="Grok TTS",
+        series_slug="grok-tts",
         api_style="websocket",
         api_version="v1-realtime-synthesize",
         output_sample_rate=8000,
@@ -375,6 +412,8 @@ TTSS: dict[str, TTSComponent] = {
         name="Cartesia",
         short_name="cartesia",
         provider="cartesia",
+        model_series="Cartesia Sonic",
+        series_slug="sonic",
         api_style="websocket",
         api_version="v1-ws",
         output_sample_rate=8000,
@@ -392,6 +431,8 @@ TTSS: dict[str, TTSComponent] = {
         name="Google Cloud TTS",
         short_name="googletts",
         provider="google",
+        model_series="Cloud TTS v1",
+        series_slug="cloud-tts-v1",
         api_style="http",
         api_version="v1-synthesize",
         output_sample_rate=8000,
@@ -413,6 +454,8 @@ VOICE_NATIVE: dict[str, VoiceNativeComponent] = {
         name="Grok Voice",
         short_name="grok-voice",
         provider="xai",
+        model_series="Grok Voice",
+        series_slug="grok-voice",
         api_style="websocket",
         api_version="v1-realtime",
         input_sample_rate=24000,
@@ -434,6 +477,8 @@ VOICE_NATIVE: dict[str, VoiceNativeComponent] = {
         name="GPT Realtime",
         short_name="gpt-realtime",
         provider="openai",
+        model_series="GPT Realtime",
+        series_slug="gpt-realtime",
         api_style="websocket",
         api_version="v1-realtime",
         input_sample_rate=24000,
@@ -457,6 +502,8 @@ VOICE_NATIVE: dict[str, VoiceNativeComponent] = {
         name="Gemini Live",
         short_name="gemini-live",
         provider="google",
+        model_series="Gemini Live",
+        series_slug="gemini-live",
         api_style="websocket",
         api_version="live-v1",
         input_sample_rate=16000,
@@ -506,7 +553,100 @@ ORCHESTRATIONS: dict[str, OrchestrationStyle] = {
 
 
 # =============================================================================
-# Provider catalog — groups components by provider for per-provider docs
+# Hierarchy for reference docs: component_type → provider → model_series
+# =============================================================================
+
+# Display name overrides (shared by both catalog functions)
+PROVIDER_DISPLAY_NAMES = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "google": "Google",
+    "xai": "xAI",
+    "deepgram": "Deepgram",
+    "sarvam": "Sarvam.ai",
+    "elevenlabs": "ElevenLabs",
+    "cartesia": "Cartesia",
+}
+
+COMPONENT_TYPE_LABELS = {
+    "llm": "LLM",
+    "stt": "STT",
+    "tts": "TTS",
+    "s2s": "Speech-to-Speech",
+}
+
+
+def get_reference_hierarchy() -> dict[str, dict[str, dict[str, list]]]:
+    """Build the component_type → provider → model_series hierarchy for docs.
+
+    Returns:
+        {
+            "llm": {
+                "openai": {
+                    "display_name": "OpenAI",
+                    "series": {
+                        "gpt-4.1": {
+                            "series_name": "GPT-4.1",
+                            "models": [(key, component), ...],
+                        },
+                        "gpt-5.4": { ... },
+                    },
+                },
+                "anthropic": { ... },
+            },
+            "stt": { ... },
+            "tts": { ... },
+            "s2s": { ... },
+        }
+    """
+    hierarchy: dict[str, dict[str, dict]] = {
+        "llm": {},
+        "stt": {},
+        "tts": {},
+        "s2s": {},
+    }
+
+    def _ensure_provider(comp_type: str, provider: str) -> dict:
+        if provider not in hierarchy[comp_type]:
+            hierarchy[comp_type][provider] = {
+                "display_name": PROVIDER_DISPLAY_NAMES.get(provider, provider.title()),
+                "series": {},
+            }
+        return hierarchy[comp_type][provider]
+
+    def _ensure_series(prov_data: dict, slug: str, name: str) -> dict:
+        if slug not in prov_data["series"]:
+            prov_data["series"][slug] = {
+                "series_name": name,
+                "models": [],
+            }
+        return prov_data["series"][slug]
+
+    for key, comp in LLMS.items():
+        prov = _ensure_provider("llm", comp.provider)
+        series = _ensure_series(prov, comp.series_slug, comp.model_series)
+        series["models"].append((key, comp))
+
+    for key, comp in STTS.items():
+        prov = _ensure_provider("stt", comp.provider)
+        series = _ensure_series(prov, comp.series_slug, comp.model_series)
+        series["models"].append((key, comp))
+
+    for key, comp in TTSS.items():
+        prov = _ensure_provider("tts", comp.provider)
+        series = _ensure_series(prov, comp.series_slug, comp.model_series)
+        series["models"].append((key, comp))
+
+    for key, comp in VOICE_NATIVE.items():
+        prov = _ensure_provider("s2s", comp.provider)
+        series = _ensure_series(prov, comp.series_slug, comp.model_series)
+        series["models"].append((key, comp))
+
+    return hierarchy
+
+
+# =============================================================================
+# Provider catalog — groups components by provider (flat, for backward compat)
 # =============================================================================
 
 
@@ -539,36 +679,24 @@ def get_provider_catalog() -> dict[str, dict]:
             }
         return providers[provider]
 
-    # Display name overrides
-    display_names = {
-        "openai": "OpenAI",
-        "anthropic": "Anthropic",
-        "google": "Google",
-        "xai": "xAI",
-        "deepgram": "Deepgram",
-        "sarvam": "Sarvam.ai",
-        "elevenlabs": "ElevenLabs",
-        "cartesia": "Cartesia",
-    }
-
     for key, comp in LLMS.items():
         p = _ensure(comp.provider)
-        p["display_name"] = display_names.get(comp.provider, comp.provider.title())
+        p["display_name"] = PROVIDER_DISPLAY_NAMES.get(comp.provider, comp.provider.title())
         p["llms"].append((key, comp))
 
     for key, comp in STTS.items():
         p = _ensure(comp.provider)
-        p["display_name"] = display_names.get(comp.provider, comp.provider.title())
+        p["display_name"] = PROVIDER_DISPLAY_NAMES.get(comp.provider, comp.provider.title())
         p["stts"].append((key, comp))
 
     for key, comp in TTSS.items():
         p = _ensure(comp.provider)
-        p["display_name"] = display_names.get(comp.provider, comp.provider.title())
+        p["display_name"] = PROVIDER_DISPLAY_NAMES.get(comp.provider, comp.provider.title())
         p["ttss"].append((key, comp))
 
     for key, comp in VOICE_NATIVE.items():
         p = _ensure(comp.provider)
-        p["display_name"] = display_names.get(comp.provider, comp.provider.title())
+        p["display_name"] = PROVIDER_DISPLAY_NAMES.get(comp.provider, comp.provider.title())
         p["voice_native"].append((key, comp))
 
     return providers

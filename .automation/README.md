@@ -69,24 +69,62 @@ uv run generate-examples docs all
 ```
 
 ### Reference (`docs/reference/`)
-**One page per provider.** Each page covers ALL roles that provider serves (LLM, STT, TTS, S2S), organized by API surface with versioned integration sections.
+**Component Type → Provider → Model Series hierarchy.** Each component type (LLM, STT, TTS, S2S) contains provider pillar pages, and each provider pillar links to model series spoke pages.
 
-- `openai.md` — Chat Completions (GPT-4.1, GPT-5.4), Whisper STT, OpenAI TTS, GPT Realtime S2S
-- `anthropic.md` — Messages API (Claude Sonnet, Claude Haiku)
-- `google.md` — Gemini HTTP LLM, Google Cloud STT, Google Cloud TTS, Gemini Live S2S
-- `xai.md` — Grok LLM, Grok TTS, Grok Voice S2S
-- `deepgram.md` — Deepgram STT (Nova 2, Nova 3)
-- `sarvam.md` — Sarvam STT
-- `elevenlabs.md` — ElevenLabs TTS (WebSocket streaming, HTTP)
-- `cartesia.md` — Cartesia TTS
+```
+docs/reference/
+├── llm/
+│   ├── openai.md              ← Provider pillar (overview, comparison table, auth)
+│   ├── openai/
+│   │   ├── gpt-4.1.md         ← Model series (benchmarks, pricing, migration guide)
+│   │   └── gpt-5.4.md         ← Model series (breaking changes, migration from 4.1)
+│   ├── anthropic.md
+│   ├── anthropic/
+│   │   └── claude-4.md
+│   ├── google.md
+│   │   └── gemini-2.0.md
+│   └── xai.md
+│       └── grok-3.md
+├── stt/
+│   ├── deepgram.md → deepgram/nova-3.md
+│   ├── sarvam.md → sarvam/saaras-v3.md
+│   ├── openai.md → openai/whisper-1.md
+│   └── google.md → google/cloud-stt-v2.md
+├── tts/
+│   ├── elevenlabs.md → elevenlabs/ws-streaming.md
+│   ├── openai.md → openai/tts.md
+│   ├── xai.md → xai/grok-tts.md
+│   ├── cartesia.md → cartesia/sonic.md
+│   └── google.md → google/cloud-tts-v1.md
+└── s2s/
+    ├── xai.md → xai/grok-voice.md
+    ├── openai.md → openai/gpt-realtime.md
+    └── google.md → google/gemini-live.md
+```
 
-When models share the same API surface (same code, different `model_id`), they appear in one table. When models require different integration code (e.g., `max_tokens` → `max_completion_tokens`), they get separate sections with separate code snippets.
+**Provider pillar pages** contain: auth setup, common patterns, model series comparison table, links to each series spoke.
+
+**Model series spoke pages** contain mandatory unique content to prevent thin content:
+- Breaking changes from previous series
+- Model variants table (specs, context window, pricing tier)
+- Benchmarks & capabilities unique to this series
+- Migration guide (concrete code diff from previous series)
+- Known issues & workarounds
+- Example projects using this series
+
+**Hub-spoke linking**: Every series page links back to its provider pillar. Provider pillars collect external link equity and distribute to spokes.
 
 ```bash
-# Generate a single provider reference page
-uv run generate-examples docs reference --provider openai
+# Generate a single provider's pillar + all series pages
+uv run generate-examples docs reference --component-type llm --provider openai
 
-# Generate all reference pages
+# Generate all LLM reference pages
+uv run generate-examples docs reference --component-type llm
+
+# Generate ALL reference pages
+uv run generate-examples docs reference
+
+# Generate everything (guides + references + concepts)
 uv run generate-examples docs all
 ```
 
@@ -106,13 +144,14 @@ uv run generate-examples docs concepts --topic audio-pipeline
 uv run generate-examples docs all
 ```
 
-### Why per-provider (not per-model-series or per-component-type)
+### Why this structure
 
-- **Users search by provider** ("Plivo OpenAI voice agent", "Plivo Deepgram integration")
-- **All API surfaces in one place**: OpenAI page covers Chat, Whisper, TTS, and Realtime
-- **Breaking changes documented inline**: GPT-4.1 (`max_tokens`) vs GPT-5.4 (`max_completion_tokens`) in the same page
-- **New model releases** update ONE provider page — not fragment the docs
-- **LLM-SEO**: "Plivo voice agent OpenAI integration" is a strong search target
+- **Component-type grouping** matches information architecture — Realtime API under S2S, Whisper under STT
+- **Provider pillar pages** target high-volume queries ("Plivo OpenAI LLM integration")
+- **Model series spoke pages** target long-tail queries ("Plivo GPT-5.4 migration guide")
+- **Every model version gets its own page** — benchmarks, pricing, examples all differ even when API contract is the same
+- **Hub-spoke linking** concentrates link equity on pillar pages while spokes rank for specific queries
+- **Thin content prevention** — mandatory unique sections (breaking changes, migration guide, benchmarks) ensure >30% unique content per page
 
 ## Quick Start
 
@@ -174,12 +213,10 @@ provider:
 uv run generate-examples trigger --type llm --key newmodel
 ```
 
-This generates: code examples + READMEs + Plivo docs guides.
-
-Then regenerate the provider's reference page:
+Then regenerate:
 
 ```bash
-uv run generate-examples docs reference --provider provider
+uv run generate-examples docs reference --component-type llm --provider provider
 ```
 
 ## Combination Math
@@ -203,7 +240,7 @@ Use `--max-examples N` to limit batch size.
 ├── docs/                             # Generated Plivo docs output
 │   ├── sidebar.json                  # Navigation config
 │   ├── concepts/                     # Architecture pages
-│   ├── reference/                    # Per-provider pages
+│   ├── reference/                    # Per-type pages (llm/, stt/, tts/, s2s/)
 │   └── guides/                       # Per-example tutorials
 └── voice_agent_generator/
     ├── __init__.py

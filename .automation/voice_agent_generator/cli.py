@@ -296,22 +296,59 @@ def docs_guide(example: str, model: str) -> None:
 
 
 @docs.command("reference")
-@click.option("--provider", required=True,
-              help="Provider to generate reference for (e.g., openai, deepgram, elevenlabs)")
+@click.option("--component-type", "component_type", default=None,
+              type=click.Choice(["llm", "stt", "tts", "s2s"]),
+              help="Component type (or all if omitted)")
+@click.option("--provider", default=None,
+              help="Provider key (e.g., openai, deepgram). Requires --component-type")
 @click.option("--model", default="claude-sonnet-4-6", help="Claude model")
-def docs_reference(provider: str, model: str) -> None:
-    """Generate a Plivo docs reference page for a provider."""
+def docs_reference(component_type: str | None, provider: str | None, model: str) -> None:
+    """Generate Plivo docs reference pages.
+
+    Examples:
+        docs reference                          # All reference pages
+        docs reference --component-type llm     # All LLM provider pages
+        docs reference --component-type llm --provider openai  # OpenAI LLM pillar + series
+    """
     from .plivo_docs import PlivoDocsGenerator
 
     repo_root = _find_repo_root()
     gen = PlivoDocsGenerator(repo_root, model=model)
 
-    content = gen.generate_provider_reference(provider)
-    output_dir = repo_root / ".automation" / "docs" / "reference"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{provider}.md"
-    output_path.write_text(content)
-    console.print(f"[green]Wrote reference: {output_path}")
+    if provider and not component_type:
+        raise click.UsageError("--provider requires --component-type")
+
+    if component_type and provider:
+        # Single provider under a component type
+        results = gen.generate_provider_references(component_type, provider)
+        docs_dir = repo_root / ".automation" / "docs" / "reference"
+        for path_key, content in results.items():
+            out_path = docs_dir / f"{path_key}.md"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(content)
+            console.print(f"[green]Wrote: {out_path}")
+    elif component_type:
+        # All providers for a component type
+        from .registry import get_reference_hierarchy
+        hierarchy = get_reference_hierarchy()
+        type_data = hierarchy.get(component_type, {})
+        for prov_key in type_data:
+            results = gen.generate_provider_references(component_type, prov_key)
+            docs_dir = repo_root / ".automation" / "docs" / "reference"
+            for path_key, content in results.items():
+                out_path = docs_dir / f"{path_key}.md"
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(content)
+                console.print(f"[green]Wrote: {out_path}")
+    else:
+        # Everything
+        results = gen.generate_all_references()
+        docs_dir = repo_root / ".automation" / "docs" / "reference"
+        for path_key, content in results.items():
+            out_path = docs_dir / f"{path_key}.md"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(content)
+            console.print(f"[green]Wrote: {out_path}")
 
 
 @docs.command("concepts")
