@@ -1,11 +1,10 @@
 """Inbound voice agent — LiveKit VoicePipelineAgent for incoming calls.
 
-This is the only file needed for inbound calls. It:
-1. Creates a LiveKit inbound SIP trunk + dispatch rule (one-time setup)
-2. Runs the LiveKit agent worker that auto-joins rooms when callers connect
-
-No separate server.py is required — Plivo sends SIP directly to LiveKit,
-and the dispatch rule routes callers to individual rooms.
+Clone, configure .env, run. On startup this file:
+1. Creates a LiveKit inbound SIP trunk + dispatch rule
+2. Creates a Plivo Zentrunk origination URI + inbound trunk
+3. Maps your Plivo phone number to the trunk
+4. Starts the agent worker
 
 Usage:
     uv run python -m inbound.agent dev
@@ -35,7 +34,9 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 
-# Plivo phone number registered on the SIP trunk
+# Plivo configuration
+PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
+PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
 PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
 
 # System prompt loaded from file
@@ -46,18 +47,34 @@ SYSTEM_PROMPT = os.getenv(
 
 
 # =============================================================================
-# SIP Trunk Setup (runs once before the worker starts)
+# SIP Setup — LiveKit + Plivo (runs once before the worker starts)
 # =============================================================================
 
 
-async def setup_sip_inbound() -> str | None:
-    """Create or reuse a LiveKit inbound SIP trunk and dispatch rule.
+async def setup_sip_inbound() -> bool:
+    """Set up the full inbound SIP pipeline: LiveKit trunk → Plivo trunk → phone number.
 
-    Returns the trunk ID if successful, None otherwise.
+    Steps:
+    1. Create LiveKit inbound SIP trunk (idempotent, reuses by name)
+    2. Create LiveKit dispatch rule (routes calls to individual rooms)
+    3. Derive the LiveKit SIP URI from the trunk ID
+    4. Create Plivo Zentrunk origination URI pointing to LiveKit SIP
+    5. Create Plivo Zentrunk inbound trunk with that origination URI
+    6. Map the Plivo phone number to the Plivo inbound trunk
+
+    All steps are idempotent — safe to run on every startup.
     """
+    from utils import PlivoZentrunk, normalize_phone_number
+
+    phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
+    if not phone:
+        logger.warning("PLIVO_PHONE_NUMBER not set — skipping SIP setup")
+        return False
+
+    # --- LiveKit side ---
     if not all([LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET]):
-        logger.warning("LiveKit credentials not set — skipping SIP trunk setup")
-        return None
+        logger.warning("LiveKit credentials not set — skipping SIP setup")
+        return False
 
     try:
         from livekit.api import LiveKitAPI
@@ -71,52 +88,49 @@ async def setup_sip_inbound() -> str | None:
             SIPInboundTrunkInfo,
         )
 
-        from utils import normalize_phone_number
-
         lk_api = LiveKitAPI(
             url=LIVEKIT_URL,
             api_key=LIVEKIT_API_KEY,
             api_secret=LIVEKIT_API_SECRET,
         )
 
-        phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
         trunk_name = "plivo-inbound-gpt52"
 
-        # Check for existing trunk
+        # 1. LiveKit inbound SIP trunk
         existing = await lk_api.sip.list_sip_inbound_trunk(
             ListSIPInboundTrunkRequest()
         )
-        trunk_id = ""
+        lk_trunk_id = ""
         for trunk in existing.items:
             if trunk.name == trunk_name:
-                trunk_id = trunk.sip_trunk_id
-                logger.info(f"Reusing inbound SIP trunk: {trunk_id}")
+                lk_trunk_id = trunk.sip_trunk_id
+                logger.info(f"[LiveKit] Reusing inbound trunk: {lk_trunk_id}")
                 break
 
-        if not trunk_id:
+        if not lk_trunk_id:
             result = await lk_api.sip.create_sip_inbound_trunk(
                 CreateSIPInboundTrunkRequest(
                     trunk=SIPInboundTrunkInfo(
                         name=trunk_name,
-                        numbers=[f"+{phone}"] if phone else [],
+                        numbers=[f"+{phone}"],
                         krisp_enabled=True,
                     )
                 )
             )
-            trunk_id = result.sip_trunk_id
-            logger.info(f"Created inbound SIP trunk: {trunk_id}")
+            lk_trunk_id = result.sip_trunk_id
+            logger.info(f"[LiveKit] Created inbound trunk: {lk_trunk_id}")
 
-        # Check for existing dispatch rule
+        # 2. LiveKit dispatch rule
         rules = await lk_api.sip.list_sip_dispatch_rule(
             ListSIPDispatchRuleRequest()
         )
-        has_rule = any(trunk_id in rule.trunk_ids for rule in rules.items)
+        has_rule = any(lk_trunk_id in rule.trunk_ids for rule in rules.items)
 
         if not has_rule:
             await lk_api.sip.create_sip_dispatch_rule(
                 CreateSIPDispatchRuleRequest(
                     name=f"dispatch-{trunk_name}",
-                    trunk_ids=[trunk_id],
+                    trunk_ids=[lk_trunk_id],
                     rule=SIPDispatchRule(
                         dispatch_rule_individual=SIPDispatchRuleIndividual(
                             room_prefix="inbound-",
@@ -124,14 +138,67 @@ async def setup_sip_inbound() -> str | None:
                     ),
                 )
             )
-            logger.info("Created dispatch rule (individual rooms, prefix='inbound-')")
+            logger.info("[LiveKit] Created dispatch rule (prefix='inbound-')")
 
         await lk_api.aclose()
-        return trunk_id
+
+        # 3. Derive LiveKit SIP URI
+        lk_host = LIVEKIT_URL.replace("wss://", "").replace("ws://", "").rstrip("/")
+        lk_sip_uri = f"{lk_trunk_id}.sip.{lk_host};transport=tcp"
+        logger.info(f"[LiveKit] SIP endpoint: {lk_sip_uri}")
 
     except Exception as e:
-        logger.error(f"SIP trunk setup failed: {e}")
-        return None
+        logger.error(f"[LiveKit] SIP setup failed: {e}")
+        return False
+
+    # --- Plivo Zentrunk side ---
+    if not all([PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN]):
+        logger.warning("Plivo credentials not set — LiveKit trunk created but Plivo not configured")
+        logger.info(f"  Manually point Plivo Zentrunk at: {lk_sip_uri}")
+        return True
+
+    try:
+        plivo = PlivoZentrunk(PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
+        uri_name = f"livekit-{trunk_name}"
+        trunk_name_plivo = f"inbound-{trunk_name}"
+
+        # 4. Plivo origination URI → LiveKit SIP endpoint
+        existing_uris = await plivo.list_origination_uris()
+        uri_uuid = ""
+        for uri in existing_uris:
+            if uri.get("name") == uri_name:
+                uri_uuid = uri.get("uri_uuid", "")
+                logger.info(f"[Plivo] Reusing origination URI: {uri_uuid}")
+                break
+
+        if not uri_uuid:
+            uri_uuid = await plivo.create_origination_uri(uri_name, lk_sip_uri)
+
+        # 5. Plivo inbound trunk
+        existing_trunks = await plivo.list_trunks()
+        plivo_trunk_id = ""
+        for t in existing_trunks:
+            if t.get("name") == trunk_name_plivo:
+                plivo_trunk_id = t.get("trunk_id", "")
+                logger.info(f"[Plivo] Reusing inbound trunk: {plivo_trunk_id}")
+                break
+
+        if not plivo_trunk_id:
+            plivo_trunk_id = await plivo.create_inbound_trunk(trunk_name_plivo, uri_uuid)
+
+        # 6. Map phone number to trunk
+        await plivo.map_number_to_trunk(phone, plivo_trunk_id)
+
+        logger.info("")
+        logger.info("  Inbound SIP pipeline ready:")
+        logger.info(f"  Phone +{phone} → Plivo trunk {plivo_trunk_id} → LiveKit {lk_sip_uri}")
+        logger.info("")
+        return True
+
+    except Exception as e:
+        logger.error(f"[Plivo] Zentrunk setup failed: {e}")
+        logger.info(f"  Manually point Plivo Zentrunk at: {lk_sip_uri}")
+        return True  # LiveKit side succeeded
 
 
 # =============================================================================
@@ -230,8 +297,6 @@ async def _entrypoint(ctx) -> None:
     initial_ctx = llm.ChatContext()
     initial_ctx.add_message(role="system", content=SYSTEM_PROMPT)
 
-    # Turn detection: Silero VAD (speech presence, barge-in) +
-    # MultilingualModel (135M transformer, semantic end-of-turn on partial transcripts)
     agent = VoicePipelineAgent(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model="nova-3"),
@@ -253,31 +318,16 @@ async def _entrypoint(ctx) -> None:
 
 
 # =============================================================================
-# Public API
+# Entry Point
 # =============================================================================
 
 
 def run_agent() -> None:
-    """Set up SIP trunk, then start the LiveKit agent worker.
+    """Set up SIP pipeline (LiveKit + Plivo), then start the agent worker.
 
     Usage: uv run python -m inbound.agent dev
     """
-    # One-time SIP trunk + dispatch rule setup
-    trunk_id = asyncio.run(setup_sip_inbound())
-    if trunk_id:
-        # Derive the SIP URI from the LiveKit URL
-        # wss://myproject.livekit.cloud → myproject.livekit.cloud
-        lk_host = LIVEKIT_URL.replace("wss://", "").replace("ws://", "").rstrip("/")
-        sip_uri = f"{trunk_id}.sip.{lk_host}"
-        logger.info(f"SIP trunk ready: {trunk_id}")
-        logger.info("")
-        logger.info("  Configure Plivo Zentrunk inbound trunk to point to:")
-        logger.info(f"  {sip_uri};transport=tcp")
-        logger.info("")
-    else:
-        logger.warning(
-            "SIP trunk not configured — agent will still start but no calls will route"
-        )
+    asyncio.run(setup_sip_inbound())
 
     from livekit.agents import WorkerOptions, cli
 

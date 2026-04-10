@@ -1,11 +1,11 @@
 """Outbound voice agent — LiveKit VoicePipelineAgent + call management.
 
-Self-contained: creates the outbound SIP trunk on startup, provides
-initiate_call() to trigger calls, and runs the agent worker.
+Clone, configure .env, run. On startup this file:
+1. Creates Plivo Zentrunk SIP credentials + outbound trunk (gets termination domain)
+2. Creates a LiveKit outbound SIP trunk using the Plivo termination domain
+3. Starts the agent worker
 
-Calls can be triggered via:
-1. initiate_call() from Python code
-2. Directly via LiveKit API (CreateSIPParticipantRequest)
+Calls triggered via initiate_call() or directly via LiveKit API.
 
 Usage:
     uv run python -m outbound.agent dev
@@ -40,16 +40,12 @@ LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 
-# Plivo SIP configuration
+# Plivo configuration
 PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
 PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
-PLIVO_SIP_DOMAIN = os.getenv("PLIVO_SIP_DOMAIN", "")
 
-# =============================================================================
-# System Prompt
-# =============================================================================
-
+# System prompt
 _OUTBOUND_PROMPT_TEMPLATE = (Path(__file__).parent / "system_prompt.md").read_text().strip()
 
 
@@ -70,38 +66,84 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", _OUTBOUND_PROMPT_TEMPLATE)
 
 
 # =============================================================================
-# SIP Trunk Setup
+# SIP Setup — Plivo outbound trunk + LiveKit outbound trunk
 # =============================================================================
 
-# Module-level trunk ID, set by setup_sip_outbound()
-OUTBOUND_TRUNK_ID = os.getenv("LIVEKIT_SIP_TRUNK_ID", "")
+# Set by setup_sip_outbound(), used by initiate_call()
+OUTBOUND_TRUNK_ID = ""
 
 
-async def setup_sip_outbound() -> str | None:
-    """Create or reuse a LiveKit outbound SIP trunk for Plivo.
+async def setup_sip_outbound() -> bool:
+    """Set up the full outbound SIP pipeline: Plivo credentials → Plivo trunk → LiveKit trunk.
 
-    Returns the trunk ID if successful, None otherwise.
+    Steps:
+    1. Create Plivo Zentrunk SIP credentials (idempotent, reuses by name)
+    2. Create Plivo Zentrunk outbound trunk → gets termination domain (XXXXXXX.zt.plivo.com)
+    3. Create LiveKit outbound SIP trunk using the Plivo termination domain + credentials
+
+    All steps are idempotent — safe to run on every startup.
     """
     global OUTBOUND_TRUNK_ID
 
     if not all([LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET]):
-        logger.warning("LiveKit credentials not set — skipping outbound SIP trunk setup")
-        return None
+        logger.warning("LiveKit credentials not set — skipping outbound SIP setup")
+        return False
 
-    if not all([PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_SIP_DOMAIN]):
-        missing = []
-        if not PLIVO_AUTH_ID:
-            missing.append("PLIVO_AUTH_ID")
-        if not PLIVO_AUTH_TOKEN:
-            missing.append("PLIVO_AUTH_TOKEN")
-        if not PLIVO_SIP_DOMAIN:
-            missing.append("PLIVO_SIP_DOMAIN")
-        logger.warning(
-            f"Skipping outbound SIP trunk setup. Missing: {', '.join(missing)}. "
-            "PLIVO_SIP_DOMAIN is your Zentrunk termination domain (XXXXXXX.zt.plivo.com)."
-        )
-        return None
+    if not all([PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN]):
+        logger.warning("Plivo credentials not set — skipping outbound SIP setup")
+        return False
 
+    from utils import PlivoZentrunk, normalize_phone_number
+
+    phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
+
+    # --- Plivo side: credentials + outbound trunk ---
+    try:
+        plivo = PlivoZentrunk(PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
+        cred_name = "livekit-outbound-gpt52"
+        trunk_name_plivo = "outbound-gpt52"
+
+        # 1. Plivo SIP credential
+        existing_creds = await plivo.list_credentials()
+        cred_uuid = ""
+        for c in existing_creds:
+            if c.get("name") == cred_name:
+                cred_uuid = c.get("credential_uuid", "")
+                logger.info(f"[Plivo] Reusing SIP credential: {cred_uuid}")
+                break
+
+        if not cred_uuid:
+            cred_uuid = await plivo.create_credential(
+                cred_name, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN
+            )
+
+        # 2. Plivo outbound trunk → termination domain
+        existing_trunks = await plivo.list_trunks()
+        plivo_trunk_id = ""
+        plivo_domain = ""
+        for t in existing_trunks:
+            if t.get("name") == trunk_name_plivo:
+                plivo_trunk_id = t.get("trunk_id", "")
+                plivo_domain = t.get("trunk_domain", "")
+                logger.info(f"[Plivo] Reusing outbound trunk: {plivo_trunk_id}")
+                break
+
+        if not plivo_trunk_id:
+            plivo_trunk_id, plivo_domain = await plivo.create_outbound_trunk(
+                trunk_name_plivo, cred_uuid
+            )
+
+        if not plivo_domain:
+            logger.error("[Plivo] No termination domain returned — cannot create LiveKit trunk")
+            return False
+
+        logger.info(f"[Plivo] Termination domain: {plivo_domain}")
+
+    except Exception as e:
+        logger.error(f"[Plivo] Outbound trunk setup failed: {e}")
+        return False
+
+    # --- LiveKit side: outbound SIP trunk ---
     try:
         from livekit.api import LiveKitAPI
         from livekit.protocol.sip import (
@@ -110,33 +152,31 @@ async def setup_sip_outbound() -> str | None:
             SIPOutboundTrunkInfo,
         )
 
-        from utils import normalize_phone_number
-
         lk_api = LiveKitAPI(
             url=LIVEKIT_URL,
             api_key=LIVEKIT_API_KEY,
             api_secret=LIVEKIT_API_SECRET,
         )
 
-        trunk_name = "plivo-outbound-gpt52"
-        phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
+        trunk_name_lk = "plivo-outbound-gpt52"
 
+        # 3. LiveKit outbound trunk
         existing = await lk_api.sip.list_sip_outbound_trunk(
             ListSIPOutboundTrunkRequest()
         )
-        trunk_id = ""
+        lk_trunk_id = ""
         for trunk in existing.items:
-            if trunk.name == trunk_name:
-                trunk_id = trunk.sip_trunk_id
-                logger.info(f"Reusing outbound SIP trunk: {trunk_id}")
+            if trunk.name == trunk_name_lk:
+                lk_trunk_id = trunk.sip_trunk_id
+                logger.info(f"[LiveKit] Reusing outbound trunk: {lk_trunk_id}")
                 break
 
-        if not trunk_id:
+        if not lk_trunk_id:
             result = await lk_api.sip.create_sip_outbound_trunk(
                 CreateSIPOutboundTrunkRequest(
                     trunk=SIPOutboundTrunkInfo(
-                        name=trunk_name,
-                        address=PLIVO_SIP_DOMAIN,
+                        name=trunk_name_lk,
+                        address=plivo_domain,
                         numbers=[f"+{phone}"] if phone else [],
                         auth_username=PLIVO_AUTH_ID,
                         auth_password=PLIVO_AUTH_TOKEN,
@@ -144,16 +184,21 @@ async def setup_sip_outbound() -> str | None:
                     )
                 )
             )
-            trunk_id = result.sip_trunk_id
-            logger.info(f"Created outbound SIP trunk: {trunk_id}")
+            lk_trunk_id = result.sip_trunk_id
+            logger.info(f"[LiveKit] Created outbound trunk: {lk_trunk_id}")
 
         await lk_api.aclose()
-        OUTBOUND_TRUNK_ID = trunk_id
-        return trunk_id
+        OUTBOUND_TRUNK_ID = lk_trunk_id
+
+        logger.info("")
+        logger.info("  Outbound SIP pipeline ready:")
+        logger.info(f"  LiveKit {lk_trunk_id} → Plivo {plivo_domain} → PSTN")
+        logger.info("")
+        return True
 
     except Exception as e:
-        logger.error(f"Outbound SIP trunk setup failed: {e}")
-        return None
+        logger.error(f"[LiveKit] Outbound trunk setup failed: {e}")
+        return False
 
 
 # =============================================================================
@@ -197,7 +242,6 @@ class CallManager:
         objective: str = "",
         context: str = "",
     ) -> OutboundCallRecord:
-        """Create and register a new outbound call record."""
         call_id = str(uuid.uuid4())
         system_prompt = build_outbound_prompt(opening_reason, objective, context)
 
@@ -268,7 +312,6 @@ class CallManager:
 
 
 def _build_tool_functions():
-    """Build LiveKit-compatible function tools for the outbound agent."""
     from livekit.agents import llm
 
     @llm.function_tool
@@ -321,7 +364,6 @@ def _build_tool_functions():
 
 
 def _prewarm(proc) -> None:
-    """Pre-warm: load Silero VAD model."""
     from livekit.plugins import silero
 
     proc.userdata["vad"] = silero.VAD.load()
@@ -329,7 +371,6 @@ def _prewarm(proc) -> None:
 
 
 async def _entrypoint(ctx) -> None:
-    """LiveKit agent entrypoint for outbound calls."""
     from livekit.agents import AutoSubscribe, llm
     from livekit.agents.pipeline import VoicePipelineAgent
     from livekit.plugins import deepgram, elevenlabs, noise_cancellation
@@ -342,7 +383,6 @@ async def _entrypoint(ctx) -> None:
     participant = await ctx.wait_for_participant()
     logger.info(f"Outbound participant connected: {participant.identity}")
 
-    # Read call metadata from room
     system_prompt = SYSTEM_PROMPT
     initial_message = (
         "The call has been answered. Begin with your outbound greeting now. "
@@ -388,7 +428,6 @@ async def _entrypoint(ctx) -> None:
 # Public API
 # =============================================================================
 
-# Module-level CallManager shared across initiate_call() callers
 call_manager = CallManager()
 
 
@@ -401,13 +440,7 @@ async def initiate_call(
 ) -> dict:
     """Initiate an outbound call via LiveKit SIP.
 
-    Creates a call record and a SIP participant that dials through
-    the outbound trunk. The agent worker auto-joins the room.
-
     Can be called from any async context — no HTTP server required.
-
-    Returns:
-        Dict with call_id, status, room_name on success, or error.
     """
     import json
 
@@ -464,10 +497,7 @@ async def initiate_call(
             livekit_room_name=room_name,
         )
 
-        logger.info(
-            f"Outbound call initiated: call_id={record.call_id}, "
-            f"to=+{to_number}, room={room_name}"
-        )
+        logger.info(f"Outbound call initiated: call_id={record.call_id}, to=+{to_number}")
 
         await lk_api.aclose()
 
@@ -484,16 +514,17 @@ async def initiate_call(
         return {"error": str(e), "call_id": record.call_id}
 
 
+# =============================================================================
+# Entry Point
+# =============================================================================
+
+
 def run_agent() -> None:
-    """Set up outbound SIP trunk, then start the LiveKit agent worker.
+    """Set up SIP pipeline (Plivo + LiveKit), then start the agent worker.
 
     Usage: uv run python -m outbound.agent dev
     """
-    trunk_id = asyncio.run(setup_sip_outbound())
-    if trunk_id:
-        logger.info(f"Outbound SIP trunk ready: {trunk_id}")
-    else:
-        logger.warning("Outbound SIP trunk not configured — outbound calls will fail")
+    asyncio.run(setup_sip_outbound())
 
     from livekit.agents import WorkerOptions, cli
 
