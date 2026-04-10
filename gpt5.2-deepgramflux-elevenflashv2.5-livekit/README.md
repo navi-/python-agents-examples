@@ -10,7 +10,8 @@ LiveKit Agents framework orchestration with Plivo SIP trunking — fully automat
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) package manager
-- LiveKit — [LiveKit Cloud](https://cloud.livekit.io/) (free tier) or [self-hosted](https://docs.livekit.io/home/self-hosting/local/)
+- LiveKit server — [self-hosted](https://docs.livekit.io/home/self-hosting/local/) (local dev) or [Cloud](https://cloud.livekit.io/) (free tier)
+- TCP tunnel for SIP (e.g., [ngrok](https://ngrok.com/)) if running LiveKit locally
 - OpenAI, Deepgram, ElevenLabs API keys
 - Plivo account with Zentrunk SIP trunking enabled
 
@@ -104,23 +105,66 @@ gpt5.2-deepgramflux-elevenflashv2.5-livekit/
 └── README.md
 ```
 
-## Local Development
+## Local Development (Self-Hosted LiveKit)
 
-LiveKit requires a server to connect to:
+Run everything locally with a tunnel for SIP:
 
-1. **LiveKit Cloud** (recommended): Free tier at [cloud.livekit.io](https://cloud.livekit.io)
-2. **Self-hosted**: `livekit-server --dev` locally. See [local setup guide](https://docs.livekit.io/home/self-hosting/local/)
+### 1. Start LiveKit server with SIP enabled
+
+```bash
+# Install: https://docs.livekit.io/home/self-hosting/local/
+livekit-server --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+```
+
+Note the API key and secret printed on startup.
+
+### 2. Tunnel the SIP port
+
+Plivo needs to reach your local LiveKit SIP service (port 5060). Use a TCP tunnel:
+
+```bash
+ngrok tcp 5060
+# Output: Forwarding tcp://0.tcp.ngrok.io:12345 -> localhost:5060
+```
+
+### 3. Configure .env
+
+```bash
+LIVEKIT_URL=ws://localhost:7880
+LIVEKIT_API_KEY=<from step 1>
+LIVEKIT_API_SECRET=<from step 1>
+LIVEKIT_SIP_ENDPOINT=0.tcp.ngrok.io:12345   # from step 2
+```
+
+### 4. Run the agent
+
+```bash
+uv run python -m inbound.agent dev
+```
+
+The agent creates the SIP trunk + Plivo config on startup. Call your Plivo number.
+
+## LiveKit Cloud Setup
+
+Alternatively, use [LiveKit Cloud](https://cloud.livekit.io/) (free tier):
+
+```bash
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=<from dashboard>
+LIVEKIT_API_SECRET=<from dashboard>
+LIVEKIT_SIP_ENDPOINT=<project_id>.sip.livekit.cloud   # from Project Settings → SIP URI
+```
 
 ## Deployment
 
-Same `.env`, same command. The SIP setup is idempotent — it checks for existing trunks/rules by name and reuses them. Safe to restart without creating duplicates.
+Same `.env`, same command. The SIP setup is idempotent — checks for existing trunks/rules by name, reuses them. Safe to restart.
 
 ```bash
 # Docker
 docker build -t livekit-agent .
 docker run --env-file .env livekit-agent
 
-# Or run directly
+# Or directly
 uv run python -m inbound.agent start
 ```
 
