@@ -107,20 +107,19 @@ gpt5.2-deepgramflux-elevenflashv2.5-livekit/
 
 ## Local Development (Self-Hosted LiveKit)
 
-Run everything locally with a tunnel for SIP:
+LiveKit SIP requires 3 services: `livekit-server`, `livekit-sip`, and Redis. The easiest way is docker-compose:
 
-### 1. Start LiveKit server with SIP enabled
+### 1. Start LiveKit infrastructure
 
 ```bash
-# Install: https://docs.livekit.io/home/self-hosting/local/
-livekit-server --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+docker compose up -d
 ```
 
-Note the API key and secret printed on startup.
+This starts Redis, livekit-server (port 7880), and livekit-sip (port 5060) with dev keys (`devkey`/`secret`).
 
 ### 2. Tunnel the SIP port
 
-Plivo needs to reach your local LiveKit SIP service (port 5060). Use a TCP tunnel:
+Plivo needs to reach your local SIP service. Tunnel port 5060:
 
 ```bash
 ngrok tcp 5060
@@ -131,9 +130,15 @@ ngrok tcp 5060
 
 ```bash
 LIVEKIT_URL=ws://localhost:7880
-LIVEKIT_API_KEY=<from step 1>
-LIVEKIT_API_SECRET=<from step 1>
-LIVEKIT_SIP_ENDPOINT=0.tcp.ngrok.io:12345   # from step 2
+LIVEKIT_API_KEY=devkey
+LIVEKIT_API_SECRET=secret
+LIVEKIT_SIP_ENDPOINT=0.tcp.ngrok.io:12345   # tunnel address from step 2
+OPENAI_API_KEY=...
+DEEPGRAM_API_KEY=...
+ELEVEN_API_KEY=...
+PLIVO_AUTH_ID=...
+PLIVO_AUTH_TOKEN=...
+PLIVO_PHONE_NUMBER=...
 ```
 
 ### 4. Run the agent
@@ -142,7 +147,7 @@ LIVEKIT_SIP_ENDPOINT=0.tcp.ngrok.io:12345   # from step 2
 uv run python -m inbound.agent dev
 ```
 
-The agent creates the SIP trunk + Plivo config on startup. Call your Plivo number.
+On startup: creates SIP trunks (LiveKit + Plivo), maps phone number, starts worker. Call your Plivo number.
 
 ## LiveKit Cloud Setup
 
