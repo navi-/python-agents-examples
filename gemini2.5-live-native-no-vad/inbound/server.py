@@ -154,14 +154,9 @@ async def answer_webhook(
     body_data = {"call_uuid": call_uuid, "from": from_number, "to": to_number}
     body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
 
-    # Build WebSocket URL: prefer PUBLIC_URL (reverse-proxy safe), fall back to request host
-    if PUBLIC_URL:
-        ws_base = PUBLIC_URL.rstrip("/").replace("https://", "wss://").replace("http://", "ws://")
-        ws_url = f"{ws_base}/ws?body={body_b64}"
-    else:
-        host = request.headers.get("host", f"localhost:{SERVER_PORT}")
-        protocol = "wss" if request.url.scheme == "https" else "ws"
-        ws_url = f"{protocol}://{host}/ws?body={body_b64}"
+    # Build WebSocket URL from PUBLIC_URL
+    ws_base = PUBLIC_URL.rstrip("/").replace("https://", "wss://").replace("http://", "ws://")
+    ws_url = f"{ws_base}/ws?body={body_b64}"
 
     logger.info(f"WebSocket URL: {ws_url}")
 
