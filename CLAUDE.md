@@ -202,6 +202,10 @@ Note: `_pending` with underscore prefix avoids RUF059 lint warning.
 - All commands run through `uv run`: `uv run pytest`, `uv run ruff check .`, `uv run python -m inbound.server`
 - `uv.lock` is committed to git for reproducible builds
 
+### Dockerfile `uv sync` and optional dependencies
+
+Every example must include `[project.optional-dependencies]` with `observability` and `streaming` extras (reference: `gpt4.1-sarvam-elevenflashv2.5-native/pyproject.toml`). The Dockerfile's `uv sync` command must include `--extra streaming` so Redis is available at runtime. If `pyproject.toml` defines a `streaming` extra but the Dockerfile omits `--extra streaming`, the container will fail at runtime when streaming features are used.
+
 ## Git Workflow
 
 - **Never commit directly to `main`**. Always create a feature branch first:
