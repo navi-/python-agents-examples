@@ -16,6 +16,7 @@ dependencies = [
     "scipy>=1.11.0",
     "phonenumbers>=8.13.0",
     "webrtcvad>=2.0.10",
+    "setuptools>=70.0.0",
 ]
 
 [dependency-groups]
