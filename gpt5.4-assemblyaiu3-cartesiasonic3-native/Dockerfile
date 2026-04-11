@@ -11,7 +11,7 @@ WORKDIR /app
 # Install dependencies
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev
+    uv sync --locked --no-dev --extra streaming
 
 # Copy application code
 COPY utils.py ./
