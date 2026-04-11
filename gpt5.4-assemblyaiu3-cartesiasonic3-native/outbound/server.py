@@ -254,9 +254,9 @@ async def outbound_answer_webhook(
     }
     body_b64 = base64.b64encode(json.dumps(body_data).encode()).decode()
 
-    host = request.headers.get("host", f"localhost:{SERVER_PORT}")
-    protocol = "wss" if request.url.scheme == "https" else "ws"
-    ws_url = f"{protocol}://{host}/ws?body={body_b64}"
+    # Build WebSocket URL from PUBLIC_URL
+    ws_base = PUBLIC_URL.rstrip("/").replace("https://", "wss://").replace("http://", "ws://")
+    ws_url = f"{ws_base}/ws?body={body_b64}"
 
     logger.info(f"Outbound WebSocket URL: {ws_url}")
 
