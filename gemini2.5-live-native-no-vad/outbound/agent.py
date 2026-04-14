@@ -3,6 +3,11 @@
 Loads the outbound system prompt and provides run_agent() for handling
 outbound call WebSocket sessions, plus CallManager for tracking call lifecycle.
 
+Pipeline logging is controlled by the LOG_LEVEL env var:
+  verbose — every pipeline event: per-packet stats, queue sizes
+  normal  — key events: turn lifecycle, Gemini responses, audio timing (default)
+  quiet   — errors and session start/end only
+
 Status state machine:
     initiating -> ringing -> connected -> completed
                          |-> no_answer
@@ -14,10 +19,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import functools
 import json
 import os
 import random
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -33,12 +40,43 @@ from utils import gemini_to_plivo, plivo_to_gemini
 
 load_dotenv()
 
+# ---------------------------------------------------------------------------
+# OTel tracing (optional — no-op when opentelemetry is not installed)
+# ---------------------------------------------------------------------------
+try:
+    from opentelemetry import trace as _otel_trace
+
+    _tracer = _otel_trace.get_tracer("voice-agent")
+except ImportError:
+    _otel_trace = None  # type: ignore[assignment]
+    _tracer = None  # type: ignore[assignment]
+
+
+def _traced(span_name: str):
+    """Decorator that wraps an async method in an OTel span."""
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        async def wrapper(self, *args, **kwargs):
+            if not _tracer:
+                return await fn(self, *args, **kwargs)
+            with _tracer.start_as_current_span(span_name, attributes={"call_id": self.call_id}):
+                return await fn(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 # Agent constants — API keys, model config, chunk sizes
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
 GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Kore")
 PLIVO_CHUNK_SIZE = 160  # 20ms at 8kHz μ-law (one Plivo packet)
 AUDIO_CHUNK_SIZE = 1024  # Bytes per chunk sent to Gemini
+
+# Logging verbosity: "verbose", "normal" (default), "quiet"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "normal").lower()
 
 if TYPE_CHECKING:
     from fastapi import WebSocket
@@ -222,8 +260,6 @@ class CallManager:
 
 async def check_order_status(order_number: str | None, email: str | None) -> dict[str, Any]:
     """Look up order status. Replace with your actual implementation."""
-    logger.info(f"Checking order: number={order_number}, email={email}")
-
     if not order_number and not email:
         return {"status": "error", "message": "Need order number or email"}
 
@@ -255,8 +291,6 @@ async def check_order_status(order_number: str | None, email: str | None) -> dic
 
 async def send_sms(phone_number: str, message: str) -> dict[str, Any]:
     """Send SMS to customer. Replace with your actual implementation."""
-    logger.info(f"Sending SMS to {phone_number}: {message[:50]}...")
-
     if not phone_number:
         return {"status": "error", "message": "Phone number required"}
 
@@ -272,8 +306,6 @@ async def schedule_callback(
     phone_number: str, reason: str, preferred_time: str, department: str
 ) -> dict[str, Any]:
     """Schedule a callback. Replace with your actual implementation."""
-    logger.info(f"Scheduling callback: {phone_number}, {department}")
-
     if not phone_number:
         return {"status": "error", "message": "Phone number required"}
 
@@ -289,8 +321,6 @@ async def schedule_callback(
 
 async def transfer_call(department: str, reason: str) -> dict[str, Any]:
     """Transfer call to human agent. Replace with your actual implementation."""
-    logger.info(f"Transferring to {department}: {reason}")
-
     return {
         "status": "transferring",
         "department": department,
@@ -328,6 +358,62 @@ class GeminiVoiceBot:
         self._send_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._client = genai.Client(api_key=GEMINI_API_KEY)
         self._tools = self._build_tools()
+
+        # Metrics
+        self._turn_count = 0
+        self._barge_in_count = 0
+        self._error_count = 0
+        self._session_start = time.monotonic()
+        self._plivo_rx_bytes = 0
+        self._plivo_tx_chunks = 0
+        self._speech_end_time: float | None = None
+        self._ttfs_samples: list[float] = []
+
+    # — Structured logging with call ID, elapsed time, and pipeline stage —
+
+    def _log(self, stage: str, msg: str) -> None:
+        """Log at 'normal' level — key pipeline events."""
+        if LOG_LEVEL == "quiet":
+            return
+        elapsed = round(time.monotonic() - self._session_start, 2)
+        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).info(
+            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
+        )
+
+    def _logv(self, stage: str, msg: str) -> None:
+        """Log at 'verbose' level — detailed debugging info."""
+        if LOG_LEVEL != "verbose":
+            return
+        elapsed = round(time.monotonic() - self._session_start, 2)
+        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).debug(
+            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
+        )
+
+    def _loge(self, stage: str, msg: str) -> None:
+        """Log errors — always visible regardless of LOG_LEVEL."""
+        self._error_count += 1
+        elapsed = round(time.monotonic() - self._session_start, 2)
+        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).error(
+            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
+        )
+
+    def _emit_turn_complete(self, barge_in: bool = False) -> None:
+        """Emit a structured turn_complete event with per-turn metrics."""
+        self._turn_count += 1
+        if barge_in:
+            self._barge_in_count += 1
+
+        logger.bind(
+            event="turn_complete",
+            call_id=self.call_id,
+            turn=self._turn_count,
+            barge_in=barge_in,
+            plivo_rx_bytes=self._plivo_rx_bytes,
+            plivo_tx_chunks=self._plivo_tx_chunks,
+        ).info(
+            f"[{self.call_id}] turn {self._turn_count} complete"
+            f"{' (barge-in)' if barge_in else ''}"
+        )
 
     def _build_tools(self) -> list[types.Tool]:
         """Build Gemini function calling tools."""
@@ -428,7 +514,7 @@ class GeminiVoiceBot:
         """Route function calls to appropriate handlers."""
         name = function_call.name
         args = function_call.args or {}
-        logger.info(f"Function call: {name} with args: {args}")
+        self._log("tool", f"calling {name}({args})")
 
         try:
             if name == "check_order_status":
@@ -454,16 +540,17 @@ class GeminiVoiceBot:
                     reason=args.get("reason", "Customer requested transfer"),
                 )
             elif name == "end_call":
-                logger.info(f"Ending call: {args.get('reason')}")
+                self._log("tool", f"end_call: {args.get('reason')}")
                 self._running = False
                 result = {"status": "call_ending", "reason": args.get("reason", "")}
             else:
                 result = {"error": f"Unknown function: {name}"}
 
+            self._log("tool", f"{name} → {result.get('status', 'done')}")
             return json.dumps(result)
 
         except Exception as e:
-            logger.error(f"Error in function {name}: {e}")
+            self._loge("tool", f"{name} ERROR: {e}")
             return json.dumps({"error": str(e)})
 
     def _build_session_config(self) -> types.LiveConnectConfig:
@@ -490,18 +577,34 @@ You can use the caller's phone number for SMS or callbacks without asking."""
             ),
             system_instruction=types.Content(parts=[types.Part(text=system_prompt)]),
             tools=self._tools,
+            # Enable transcription for observability (user speech + model speech)
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+            # Server-side VAD — no client-side VAD in this example
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    disabled=False,
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    prefix_padding_ms=100,
+                    silence_duration_ms=500,
+                ),
+                activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                turn_coverage=types.TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            ),
         )
 
+    @_traced("session")
     async def run(self) -> None:
         """Run the voice bot session."""
-        logger.info(f"Starting bot session for call {self.call_id}")
+        self._log("session", f"Starting bot session for call {self.call_id}")
         self._running = True
 
         try:
             config = self._build_session_config()
 
             async with self._client.aio.live.connect(model=GEMINI_MODEL, config=config) as session:
-                logger.info("Connected to Gemini Live API")
+                self._log("session", "Connected to Gemini Live API")
 
                 await session.send_client_content(
                     turns=types.Content(role="user", parts=[types.Part(text=self.initial_message)]),
@@ -511,10 +614,28 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                 await self._run_streaming_tasks(session)
 
         except Exception as e:
-            logger.error(f"Bot session error: {e}")
+            self._loge("session", f"Bot session error: {e}")
         finally:
             self._running = False
-            logger.info(f"Bot session ended for call {self.call_id}")
+            elapsed = round(time.monotonic() - self._session_start, 2)
+            ttfs_avg = (
+                round(sum(self._ttfs_samples) / len(self._ttfs_samples))
+                if self._ttfs_samples
+                else None
+            )
+            logger.bind(
+                event="session_end",
+                call_id=self.call_id,
+                duration_s=elapsed,
+                turns=self._turn_count,
+                barge_ins=self._barge_in_count,
+                errors=self._error_count,
+                ttfs_avg_ms=ttfs_avg,
+            ).info(
+                f"[{self.call_id}] Session ended: {elapsed}s, "
+                f"{self._turn_count} turns, {self._barge_in_count} barge-ins, "
+                f"{self._error_count} errors"
+            )
 
     async def _run_streaming_tasks(self, session) -> None:
         """Run the concurrent streaming tasks."""
@@ -528,7 +649,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
             done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 if task.exception():
-                    logger.error(f"Task {task.get_name()} failed: {task.exception()}")
+                    self._loge("tasks", f"Task {task.get_name()} failed: {task.exception()}")
         finally:
             self._running = False
             for task in tasks:
@@ -537,6 +658,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
 
+    @_traced("plivo_rx")
     async def _receive_from_plivo(self, session) -> None:
         """Receive audio from Plivo WebSocket and forward to Gemini."""
         try:
@@ -549,6 +671,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                     payload = message.get("media", {}).get("payload", "")
                     if payload:
                         mulaw_audio = base64.b64decode(payload)
+                        self._plivo_rx_bytes += len(mulaw_audio)
                         pcm_audio = plivo_to_gemini(mulaw_audio)
 
                         self._audio_buffer.extend(pcm_audio)
@@ -562,19 +685,21 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                 elif event == "text":  # For testing - inject text as user input
                     text = message.get("text", "")
                     if text:
-                        logger.info(f"Injecting text: {text[:50]}...")
+                        self._log("plivo_rx", f"Injecting text: {text[:50]}...")
                         await session.send_client_content(
                             turns=types.Content(role="user", parts=[types.Part(text=text)]),
                             turn_complete=True,
                         )
 
                 elif event == "stop":
+                    self._log("plivo_rx", "Plivo stop event received")
                     break
 
         except Exception as e:
             if "1000" not in str(e):
-                logger.error(f"Plivo receiver error: {e}")
+                self._loge("plivo_rx", f"ERROR: {e}")
 
+    @_traced("gemini_rx")
     async def _receive_from_gemini(self, session) -> None:
         """Receive audio from Gemini and queue for Plivo.
 
@@ -590,12 +715,68 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                             return
 
                         if response.server_content:
+                            # Handle server-side interruption confirmation
+                            if response.server_content.interrupted:
+                                self._log("gemini_rx", "Gemini confirmed interruption")
+
                             model_turn = response.server_content.model_turn
                             if model_turn and model_turn.parts:
                                 for part in model_turn.parts:
                                     if part.inline_data and part.inline_data.data:
                                         plivo_audio = gemini_to_plivo(part.inline_data.data)
                                         await self._send_queue.put(plivo_audio)
+
+                                        # Track TTFS (time-to-first-speech)
+                                        if self._speech_end_time is not None:
+                                            ttfs = (
+                                                time.monotonic() - self._speech_end_time
+                                            ) * 1000
+                                            self._ttfs_samples.append(ttfs)
+                                            self._logv("metrics", f"TTFS: {ttfs:.0f}ms")
+                                            self._speech_end_time = None
+
+                                    if part.text:
+                                        self._logv(
+                                            "gemini_rx",
+                                            f"Transcript: {part.text[:80]}",
+                                        )
+                                        logger.bind(
+                                            event="agent_text",
+                                            call_id=self.call_id,
+                                            text=part.text[:200],
+                                        ).debug(f"[{self.call_id}] agent: {part.text[:80]}")
+
+                            # Transcription events from audio
+                            if hasattr(response.server_content, "output_transcription"):
+                                ot = response.server_content.output_transcription
+                                if ot and hasattr(ot, "text") and ot.text:
+                                    self._logv(
+                                        "gemini_rx",
+                                        f"Agent transcript: {ot.text[:80]}",
+                                    )
+                                    logger.bind(
+                                        event="agent_text",
+                                        call_id=self.call_id,
+                                        text=ot.text[:200],
+                                    ).debug(f"[{self.call_id}] agent: {ot.text[:80]}")
+
+                            if hasattr(response.server_content, "input_transcription"):
+                                it = response.server_content.input_transcription
+                                if it and hasattr(it, "text") and it.text:
+                                    self._logv(
+                                        "gemini_rx",
+                                        f"User transcript: {it.text[:80]}",
+                                    )
+                                    self._speech_end_time = time.monotonic()
+                                    logger.bind(
+                                        event="user_text",
+                                        call_id=self.call_id,
+                                        text=it.text[:200],
+                                    ).debug(f"[{self.call_id}] user: {it.text[:80]}")
+
+                            if response.server_content.turn_complete:
+                                self._log("gemini_rx", "Turn complete")
+                                self._emit_turn_complete()
 
                         if response.tool_call:
                             for fc in response.tool_call.function_calls:
@@ -613,12 +794,13 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                 except Exception as e:
                     if "cancelled" in str(e).lower():
                         raise
-                    logger.error(f"Gemini receive error: {e}")
+                    self._loge("gemini_rx", f"ERROR: {e}")
                     raise
 
         except asyncio.CancelledError:
             pass
 
+    @_traced("plivo_tx")
     async def _send_to_plivo(self) -> None:
         """Send queued audio to Plivo WebSocket in 20ms chunks."""
         audio_buffer = bytearray()
@@ -642,6 +824,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                             },
                         }
                         await self.websocket.send_text(json.dumps(message))
+                        self._plivo_tx_chunks += 1
 
                 except TimeoutError:
                     continue
