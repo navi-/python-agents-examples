@@ -16,6 +16,7 @@ dependencies = [
     "scipy>=1.11.0",
     "phonenumbers>=8.13.0",
     "silero-vad>=5.1",
+    "onnxruntime>=1.18.0",
     "torch>=2.0.0",
     "httpx>=0.27.0",
     "aiohttp>=3.13.3",
