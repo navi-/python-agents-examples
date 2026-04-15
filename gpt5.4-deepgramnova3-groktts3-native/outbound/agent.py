@@ -488,6 +488,7 @@ class VoiceAgent:
         self._turn_tts_chunks: int = 0
         self._turn_tts_audio_s: float = 0.0
         self._turn_text: str = ""
+        self._turn_agent_text: str = ""
         self._turn_start_time: float | None = None
 
     def _log(self, stage: str, msg: str) -> None:
@@ -522,7 +523,8 @@ class VoiceAgent:
             event="turn_complete",
             call_id=self.parent_call_id,
             turn=self._turn_count,
-            user_text=self._turn_text[:80] if self._turn_text else "",
+            user_text=self._turn_text or "",
+            agent_text=self._turn_agent_text or "",
             llm_ms=self._turn_llm_ms,
             tts_total_ms=self._turn_tts_total_ms,
             tts_ttfb_ms=self._turn_tts_ttfb_ms,
@@ -1144,6 +1146,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
             self._turn_tts_chunks = 0
             self._turn_tts_audio_s = 0.0
             self._turn_text = text
+            self._turn_agent_text = ""
             self._turn_start_time = time.monotonic()
             try:
                 response_text = await self._generate_llm_response(text)
@@ -1151,6 +1154,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                     self._logv("turn", "empty LLM response, skipping TTS")
                     return
 
+                self._turn_agent_text = response_text
                 self._is_playing = True
                 self._current_tts_task = asyncio.create_task(
                     self._synthesize_with_groktts(response_text),
