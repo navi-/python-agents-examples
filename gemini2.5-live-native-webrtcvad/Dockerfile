@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
 
 # Install build dependencies for webrtcvad C extension
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && \
