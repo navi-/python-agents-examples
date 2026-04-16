@@ -466,7 +466,7 @@ def main() -> None:
     logger.info(
         f"Starting GPT-5.4 Mini + Deepgram + Grok TTS Outbound Voice Agent on port {SERVER_PORT}"
     )
-    uvicorn.run("outbound.server:app", host="0.0.0.0", port=SERVER_PORT, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT, log_level="info")
 
 
 if __name__ == "__main__":
