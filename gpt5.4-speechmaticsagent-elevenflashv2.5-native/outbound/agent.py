@@ -986,6 +986,16 @@ class VoiceAgent:
                 "llm",
                 f"response ({latency:.0f}ms): '{full_content[:80]}'",
             )
+            if full_content:
+                logger.bind(
+                    event="agent_text",
+                    call_id=self.parent_call_id,
+                    turn=self._turn_count,
+                    text=full_content,
+                ).info(
+                    f"[{self.call_id[:8]}] agent_text turn {self._turn_count}: "
+                    f"'{full_content[:60]}'"
+                )
             return full_content
 
         except Exception as e:
@@ -1371,6 +1381,15 @@ You can use the caller's phone number for SMS or callbacks without asking."""
         """Commit a turn for processing -- creates the turn task."""
         self._turn_count += 1
         self._log("turn", f"turn {self._turn_count}: '{transcript[:80]}'")
+        logger.bind(
+            event="user_text",
+            call_id=self.parent_call_id,
+            turn=self._turn_count,
+            text=transcript,
+        ).info(
+            f"[{self.call_id[:8]}] user_text turn {self._turn_count}: "
+            f"'{transcript[:60]}'"
+        )
         self._current_turn_task = asyncio.create_task(
             self._process_text_turn(transcript),
             name=f"turn_{self._turn_count}",
