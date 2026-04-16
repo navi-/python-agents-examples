@@ -1259,7 +1259,7 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                         if speech_started and not self._barged_in:
                             self._barged_in = True
                             self._log("vad", "speech START detected")
-                            interrupted = False
+                            task_cancelled = False
                             if (
                                 self._current_turn_task
                                 and not self._current_turn_task.done()
@@ -1268,13 +1268,13 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                                 self._log(
                                     "vad", "cancelled in-flight turn task"
                                 )
-                                interrupted = True
+                                task_cancelled = True
                             if (
                                 self._current_tts_task
                                 and not self._current_tts_task.done()
                             ):
                                 self._current_tts_task.cancel()
-                                interrupted = True
+                                task_cancelled = True
                             cleared = 0
                             while not self._send_queue.empty():
                                 try:
@@ -1291,14 +1291,14 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                             self._log(
                                 "vad",
                                 f"barge-in: clearAudio sent, "
-                                f"cancelled={interrupted}, "
+                                f"cancelled={task_cancelled}, "
                                 f"cleared={cleared} chunks",
                             )
                             self._stt.clear_transcript()
-                            self._is_playing = False
                             self._barge_in_count += 1
-                            if interrupted:
+                            if self._is_playing:
                                 self._emit_turn_complete(barge_in=True)
+                            self._is_playing = False
 
                         if speech_ended:
                             self._speech_end_time = time.monotonic()
