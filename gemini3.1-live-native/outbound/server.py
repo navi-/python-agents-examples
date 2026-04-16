@@ -491,7 +491,7 @@ async def websocket_endpoint(
 def main() -> None:
     """Run the outbound server."""
     logger.info(f"Starting Gemini 3.1 Flash Live Outbound Agent on port {SERVER_PORT}")
-    uvicorn.run("outbound.server:app", host="0.0.0.0", port=SERVER_PORT, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT, log_level="info")
 
 
 if __name__ == "__main__":

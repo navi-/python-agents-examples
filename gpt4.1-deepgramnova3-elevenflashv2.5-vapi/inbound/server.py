@@ -422,7 +422,7 @@ def main() -> None:
         else:
             logger.warning("SIP auto-configuration failed. Configure manually.")
 
-    uvicorn.run("inbound.server:app", host="0.0.0.0", port=SERVER_PORT, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT, log_level="info")
 
 
 if __name__ == "__main__":

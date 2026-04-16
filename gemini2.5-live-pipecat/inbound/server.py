@@ -312,7 +312,7 @@ def main() -> None:
     else:
         logger.info("To enable auto-configuration, set PUBLIC_URL and PLIVO_PHONE_NUMBER")
 
-    uvicorn.run("inbound.server:app", host="0.0.0.0", port=SERVER_PORT, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT, log_level="info")
 
 
 if __name__ == "__main__":

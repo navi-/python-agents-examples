@@ -399,12 +399,7 @@ def main() -> None:
         f"Starting Gemini-Deepgram-Cartesia Outbound Voice Agent "
         f"on port {SERVER_PORT}"
     )
-    uvicorn.run(
-        "outbound.server:app",
-        host="0.0.0.0",
-        port=SERVER_PORT,
-        log_level="info",
-    )
+    uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT, log_level="info")
 
 
 if __name__ == "__main__":
