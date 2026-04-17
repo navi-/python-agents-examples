@@ -987,27 +987,34 @@ class VoiceAgent:
         self._checkpoint_sent_time = time.monotonic()
         self._logv("plivo_tx", f"checkpoint sent: {name}")
 
-    def _log(self, stage: str, msg: str) -> None:
+    def _log(self, stage: str, msg: str, **extra: object) -> None:
+        """Log at 'normal' level — key pipeline events.
+
+        extra: additional fields bound to the log record. Used to attach
+        telemetry events consumed by the hosting app (e.g. Redis/SSE):
+        ``event="user_text", turn=N, text=transcript``. The bound fields
+        are invisible on the console but available to structured sinks.
+        """
         if LOG_LEVEL == "quiet":
             return
         elapsed = time.monotonic() - self._session_start
-        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).info(
-            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
-        )
+        logger.bind(
+            call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+        ).info(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
 
-    def _logv(self, stage: str, msg: str) -> None:
+    def _logv(self, stage: str, msg: str, **extra: object) -> None:
         if LOG_LEVEL != "verbose":
             return
         elapsed = time.monotonic() - self._session_start
-        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).debug(
-            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
-        )
+        logger.bind(
+            call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+        ).debug(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
 
-    def _loge(self, stage: str, msg: str) -> None:
+    def _loge(self, stage: str, msg: str, **extra: object) -> None:
         elapsed = time.monotonic() - self._session_start
-        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).error(
-            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
-        )
+        logger.bind(
+            call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+        ).error(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
 
     def _build_routing_tool(self) -> list[dict[str, Any]]:
         """Build the single delegation tool for GPT-4.1 mini (conversation model)."""
@@ -1331,15 +1338,19 @@ class VoiceAgent:
                 )
 
             if not message.get("tool_calls"):
-                # Mini responded directly — fast conversational turn
+                # Mini responded directly — fast conversational turn.
+                # The _log line below doubles as the SSE agent_text event.
+                assistant_text = message.get("content", "")
                 self._log(
                     "llm",
                     f"{OPENAI_CONVERSATION_MODEL} ({latency:.0f}ms, "
                     f"{tokens.get('prompt_tokens', '?')}"
                     f"→{tokens.get('completion_tokens', '?')} tok): "
-                    f"'{message.get('content', '')[:80]}'",
+                    f"'{assistant_text[:80]}'",
+                    event="agent_text",
+                    turn=self._turn_count,
+                    text=assistant_text,
                 )
-                assistant_text = message.get("content", "")
                 self._conversation_history.append({
                     "role": "assistant", "content": assistant_text,
                 })
@@ -1452,10 +1463,14 @@ class VoiceAgent:
             followup_msg = followup_result["choices"][0]["message"]
             latency2 = (time.monotonic() - t2) * 1000
             assistant_text = followup_msg.get("content", "")
+            # The _log line below doubles as the SSE agent_text event.
             self._log(
                 "llm",
                 f"mini follow-up ({latency2:.0f}ms): "
                 f"'{assistant_text[:80]}'",
+                event="agent_text",
+                turn=self._turn_count,
+                text=assistant_text,
             )
 
             self._conversation_history.append({
@@ -1863,10 +1878,14 @@ You can use the caller's phone number for SMS or lookups without asking."""
                                 transcript = self._deepgram.latest_transcript
                                 if transcript.strip():
                                     self._turn_count += 1
+                                    # The _log line below doubles as the SSE user_text event.
                                     self._log(
                                         "smart_turn",
                                         f"turn {self._turn_count} complete: "
                                         f"'{transcript[:80]}'",
+                                        event="user_text",
+                                        turn=self._turn_count,
+                                        text=transcript,
                                     )
                                     task = asyncio.create_task(
                                         self._process_text_turn(transcript),
@@ -1915,10 +1934,14 @@ You can use the caller's phone number for SMS or lookups without asking."""
                             transcript = self._deepgram.latest_transcript
                             if transcript.strip():
                                 self._turn_count += 1
+                                # The _log line below doubles as the SSE user_text event.
                                 self._log(
                                     "smart_turn",
                                     f"turn {self._turn_count} (silence timeout): "
                                     f"'{transcript[:80]}'",
+                                    event="user_text",
+                                    turn=self._turn_count,
+                                    text=transcript,
                                 )
                                 task = asyncio.create_task(
                                     self._process_text_turn(transcript),
