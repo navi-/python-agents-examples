@@ -217,10 +217,80 @@ Every example must include `[project.optional-dependencies]` with `observability
 ## Code Quality
 
 - `from __future__ import annotations` at top of every `.py` file
-- `loguru` for logging (not stdlib `logging`)
+- `loguru` for logging (not stdlib `logging`) — see "Logging & Observability" below
 - No hardcoded API keys — always `os.getenv()`
 - `python-dotenv` with `load_dotenv()` at module level
 - All imports lazy where heavy (e.g., `import torch` inside methods)
+
+## Logging & Observability
+
+Every native agent exposes three private helpers — `self._log`, `self._logv`, `self._loge` — as the **only** way to emit log lines from agent business logic. Do not call `logger.bind(...).info(...)` / `.debug(...)` / `.error(...)` inline. The helpers centralise the structured fields consumed by hosting apps (Redis/SSE, OTel, file sinks) and keep the console output consistent across examples.
+
+### Helper contract
+
+```python
+def _log(self, stage: str, msg: str, **extra: object) -> None:
+    if LOG_LEVEL == "quiet":
+        return
+    elapsed = round(time.monotonic() - self._session_start, 2)
+    logger.bind(
+        call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+    ).info(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
+
+def _logv(self, stage: str, msg: str, **extra: object) -> None:   # .debug, guarded by LOG_LEVEL == "verbose"
+def _loge(self, stage: str, msg: str, **extra: object) -> None:   # .error, always visible
+```
+
+Three non-negotiable rules:
+
+1. **Full `self.call_id` — never truncate.** The console prefix `[{self.call_id}]` and the `call_id=` bound field both carry the complete Plivo CallUUID. Hosting apps correlate logs to a run by exact-UUID match against their database; an 8-char prefix collides and forces downstream workarounds.
+
+2. **`**extra` is for structured event fields.** Pass `event=`, `turn=`, `text=`, or any domain field as a keyword argument. It gets attached to the log record's bound fields (visible to structured sinks) without cluttering the console message. Example:
+
+   ```python
+   self._log(
+       "turn",
+       f"turn {self._turn_count}: '{transcript[:80]}'",
+       event="user_text",
+       turn=self._turn_count,
+       text=transcript,
+   )
+   ```
+
+3. **No standalone `logger.bind(event=...)` in business code.** A telemetry event and the human-readable log line are the same log call. When you have a log line that should ALSO fire a structured event, add kwargs to it — don't emit twice.
+
+### Required structured events
+
+Every agent must emit these four events. The hosting app (VoxLab) subscribes to them via Redis Streams; missing events break the Conversation tab, metrics dashboard, or both.
+
+| Event | When to fire | Minimum fields | Helper to use |
+|---|---|---|---|
+| `user_text` | Immediately when the STT layer delivers a final transcript that will be processed as a user turn. One emit per turn. | `event="user_text"`, `turn=<int>`, `text=<str>` | `self._log("turn", …)` or `self._logv("…_rx", …)` |
+| `agent_text` | Immediately when the LLM (or S2S model) produces a text response for the caller. Fire in the line where the response first exists — do not wait for TTS. One emit per agent turn. | `event="agent_text"`, `turn=<int>`, `text=<str>` | `self._log("llm", …)` |
+| `turn_complete` | At end-of-playback (Plivo `playedStream`) or on barge-in during actual audio playback. Wrapped by the dedicated `_emit_turn_complete()` helper — do not inline. | `event="turn_complete"`, `turn`, per-turn latency metrics (`llm_ms`, `tts_total_ms`, `tts_ttfb_ms`, `playback_ms`), `barge_in=<bool>` | `self._emit_turn_complete(barge_in=…)` |
+| `call_summary` / `session_end` | Once at session end with aggregate counters. | `turns`, `barge_ins`, `duration_s`, `ttfs_avg_ms`, `errors` | Inline `logger.bind(event="…", …).info(...)` inside the agent's `run()` finally-block (long-lived aggregation, one shot — justifiable inline) |
+
+For `turn_complete` specifically: the emit gate in the barge-in handler must be `if self._is_playing:`, not `if task_cancelled:`. The greeting and post-TTS-pre-`playedStream` windows are real barge-ins but no asyncio task is in flight — gating on task state drops those emits.
+
+### Log level guidance
+
+- **`.info` (`_log`)** — every meaningful pipeline event a developer wants to see while watching a call live: session start/end, turn commits, LLM responses, TTS completion, barge-in, tool calls. A user on an open terminal should see the whole story of one call in ~30–60 lines at default settings.
+- **`.debug` (`_logv`)** — per-packet stats, VAD frame numbers, queue sizes, intermediate probability values, follow-up-LLM latency breakdowns. Enabled only when `LOG_LEVEL=verbose`.
+- **`.error` (`_loge`)** — anything that represents a failure the agent is recovering from (API error, websocket disconnect, STT timeout). Always visible regardless of `LOG_LEVEL`.
+
+Do not route exception stack traces through `_log`. Use `logger.exception(...)` or the exception handler's own return path.
+
+### Do NOT
+
+- Call `logger.bind(...).info(...)` inline inside a method body when the same line should appear on the console. Use `self._log(stage, msg, **extra)`.
+- Truncate `call_id` anywhere — not in the message prefix, not in the bound field, not in OTel span attributes. Full UUID always.
+- Emit a "display event" (`user_text`, `agent_text`) behind the same gate as a "turn event" (`turn_complete`). Display events fire as soon as text is known; turn events fire when the agent turn is logically over. Coupling them delays what the UI can show by seconds.
+- Duplicate the same content at two log levels. If `_log("llm", "response …: '{text[:80]}'", …)` already prints the truncated text at INFO, don't also emit a `_logv("llm", f"full: {text}")` a line later. Attach the full text via `text=` on the bound fields.
+
+### Reference files
+
+- `gpt5.4-deepgramnova3-groktts3-native/inbound/agent.py` — canonical pipeline-agent logging shape, including the three helpers, the `_emit_turn_complete` helper, and the folded user/agent_text emissions.
+- `gemini2.5-live-native-no-vad/inbound/agent.py` — canonical S2S logging shape, showing text events folded into `_logv` for API-transcribed content.
 
 ## Lint
 

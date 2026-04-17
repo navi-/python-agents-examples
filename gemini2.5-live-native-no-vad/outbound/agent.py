@@ -371,31 +371,37 @@ class GeminiVoiceBot:
 
     # — Structured logging with call ID, elapsed time, and pipeline stage —
 
-    def _log(self, stage: str, msg: str) -> None:
-        """Log at 'normal' level — key pipeline events."""
+    def _log(self, stage: str, msg: str, **extra: object) -> None:
+        """Log at 'normal' level — key pipeline events.
+
+        extra: additional fields bound to the log record. Used to attach
+        telemetry events consumed by the hosting app (e.g. Redis/SSE):
+        ``event="user_text", turn=N, text=transcript``. The bound fields
+        are invisible on the console but available to structured sinks.
+        """
         if LOG_LEVEL == "quiet":
             return
         elapsed = round(time.monotonic() - self._session_start, 2)
-        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).info(
-            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
-        )
+        logger.bind(
+            call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+        ).info(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
 
-    def _logv(self, stage: str, msg: str) -> None:
+    def _logv(self, stage: str, msg: str, **extra: object) -> None:
         """Log at 'verbose' level — detailed debugging info."""
         if LOG_LEVEL != "verbose":
             return
         elapsed = round(time.monotonic() - self._session_start, 2)
-        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).debug(
-            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
-        )
+        logger.bind(
+            call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+        ).debug(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
 
-    def _loge(self, stage: str, msg: str) -> None:
+    def _loge(self, stage: str, msg: str, **extra: object) -> None:
         """Log errors — always visible regardless of LOG_LEVEL."""
         self._error_count += 1
         elapsed = round(time.monotonic() - self._session_start, 2)
-        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).error(
-            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
-        )
+        logger.bind(
+            call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+        ).error(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
 
     def _emit_turn_complete(self, barge_in: bool = False) -> None:
         """Emit a structured turn_complete event with per-turn metrics."""
@@ -736,15 +742,13 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                                             self._speech_end_time = None
 
                                     if part.text:
+                                        # _logv doubles as the SSE agent_text event.
                                         self._logv(
                                             "gemini_rx",
                                             f"Transcript: {part.text[:80]}",
-                                        )
-                                        logger.bind(
                                             event="agent_text",
-                                            call_id=self.call_id,
                                             text=part.text[:200],
-                                        ).debug(f"[{self.call_id}] agent: {part.text[:80]}")
+                                        )
 
                             # Transcription events from audio
                             if hasattr(response.server_content, "output_transcription"):
@@ -753,26 +757,20 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                                     self._logv(
                                         "gemini_rx",
                                         f"Agent transcript: {ot.text[:80]}",
-                                    )
-                                    logger.bind(
                                         event="agent_text",
-                                        call_id=self.call_id,
                                         text=ot.text[:200],
-                                    ).debug(f"[{self.call_id}] agent: {ot.text[:80]}")
+                                    )
 
                             if hasattr(response.server_content, "input_transcription"):
                                 it = response.server_content.input_transcription
                                 if it and hasattr(it, "text") and it.text:
+                                    self._speech_end_time = time.monotonic()
                                     self._logv(
                                         "gemini_rx",
                                         f"User transcript: {it.text[:80]}",
-                                    )
-                                    self._speech_end_time = time.monotonic()
-                                    logger.bind(
                                         event="user_text",
-                                        call_id=self.call_id,
                                         text=it.text[:200],
-                                    ).debug(f"[{self.call_id}] user: {it.text[:80]}")
+                                    )
 
                             if response.server_content.turn_complete:
                                 self._log("gemini_rx", "Turn complete")

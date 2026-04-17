@@ -477,31 +477,37 @@ class VoiceAgent:
 
     # -- Structured logging with call ID, elapsed time, and pipeline stage --
 
-    def _log(self, stage: str, msg: str) -> None:
-        """Log at 'normal' level — key pipeline events."""
+    def _log(self, stage: str, msg: str, **extra: object) -> None:
+        """Log at 'normal' level — key pipeline events.
+
+        extra: additional fields bound to the log record. Used to attach
+        telemetry events consumed by the hosting app (e.g. Redis/SSE):
+        ``event="user_text", turn=N, text=transcript``. The bound fields
+        are invisible on the console but available to structured sinks.
+        """
         if LOG_LEVEL == "quiet":
             return
         elapsed = round(time.monotonic() - self._session_start, 2)
-        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).info(
-            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
-        )
+        logger.bind(
+            call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+        ).info(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
 
-    def _logv(self, stage: str, msg: str) -> None:
+    def _logv(self, stage: str, msg: str, **extra: object) -> None:
         """Log at 'verbose' level — detailed debugging info."""
         if LOG_LEVEL != "verbose":
             return
         elapsed = round(time.monotonic() - self._session_start, 2)
-        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).debug(
-            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
-        )
+        logger.bind(
+            call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+        ).debug(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
 
-    def _loge(self, stage: str, msg: str) -> None:
+    def _loge(self, stage: str, msg: str, **extra: object) -> None:
         """Log errors — always visible regardless of LOG_LEVEL."""
         self._error_count += 1
         elapsed = round(time.monotonic() - self._session_start, 2)
-        logger.bind(call_id=self.call_id, elapsed_s=elapsed, stage=stage).error(
-            f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
-        )
+        logger.bind(
+            call_id=self.call_id, elapsed_s=elapsed, stage=stage, **extra
+        ).error(f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}")
 
     def _emit_turn_complete(self, barge_in: bool = False) -> None:
         """Emit a structured turn_complete event with per-turn metrics."""
@@ -820,20 +826,14 @@ class VoiceAgent:
                     self._logv("llm", f"follow-up response ({latency2:.0f}ms)")
 
             self._conversation_history.append({"role": "assistant", "content": full_content})
+            # The single _log line below doubles as the SSE agent_text event.
             self._log(
                 "llm",
                 f"response ({latency:.0f}ms): '{full_content[:80]}'",
+                event="agent_text",
+                turn=self._turn_count,
+                text=full_content,
             )
-            if full_content:
-                logger.bind(
-                    event="agent_text",
-                    call_id=self.parent_call_id,
-                    turn=self._turn_count,
-                    text=full_content,
-                ).info(
-                    f"[{self.call_id[:8]}] agent_text turn {self._turn_count}: "
-                    f"'{full_content[:60]}'"
-                )
             return full_content
 
         except Exception as e:
@@ -1218,15 +1218,13 @@ You can use the caller's phone number for SMS or callbacks without asking."""
     def _commit_turn(self, transcript: str) -> None:
         """Commit a turn for processing — creates the turn task."""
         self._turn_count += 1
-        self._log("turn", f"turn {self._turn_count}: '{transcript[:80]}'")
-        logger.bind(
+        # The single _log line below doubles as the SSE user_text event.
+        self._log(
+            "turn",
+            f"turn {self._turn_count}: '{transcript[:80]}'",
             event="user_text",
-            call_id=self.parent_call_id,
             turn=self._turn_count,
             text=transcript,
-        ).info(
-            f"[{self.call_id[:8]}] user_text turn {self._turn_count}: "
-            f"'{transcript[:60]}'"
         )
         self._current_turn_task = asyncio.create_task(
             self._process_text_turn(transcript),
