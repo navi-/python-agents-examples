@@ -7,28 +7,35 @@ Generates three types of content:
    with a specific stack. One guide per example.
    Path: docs/guides/{example-name}.md
 
-2. **Reference** (per provider):
-   One page per provider (OpenAI, Deepgram, ElevenLabs, etc.). Each page covers
-   ALL roles that provider serves (LLM, STT, TTS, S2S) with per-API-surface
-   sections. Model versions with breaking API changes get separate integration
-   sections within the same page.
-   Path: docs/reference/{provider}.md
+2. **Reference** (Component Type → Provider → Model Series):
+   Hierarchical reference pages organized by component type (LLM, STT, TTS, S2S),
+   then by provider, then by model series.
+
+   - Provider pillar pages: overview, auth, model series comparison table
+     Path: docs/reference/{type}/{provider}.md
+   - Model series spoke pages: version-specific integration, benchmarks, migration
+     Path: docs/reference/{type}/{provider}/{series-slug}.md
+
+   Hub-spoke linking: series pages link back to their provider pillar.
+   Provider pillars collect external link equity and distribute to spokes.
 
 3. **Concepts** (architecture & decisions):
    Explains the universal patterns: Plivo WebSocket protocol, audio pipeline,
    turn detection strategies, orchestration approaches.
    Path: docs/concepts/{topic}.md
 
-Why per-provider (not per-model-series or per-component-type):
-- Users search by provider ("Plivo Deepgram voice agent", "Plivo OpenAI STT")
-- One page per provider: all API surfaces in one place (Chat, Realtime, Whisper)
-- New model releases update ONE provider page, not fragment the docs
-- Breaking API changes (max_tokens → max_completion_tokens) are documented inline
-- LLM-SEO: "Plivo voice agent OpenAI integration" is a strong search target
+Why Component Type → Provider → Model Series:
+- Component-type grouping matches info architecture (Realtime under S2S, Whisper under STT)
+- Provider pillar pages target high-volume queries ("Plivo OpenAI LLM integration")
+- Model series spokes target long-tail queries ("Plivo GPT-5.4 migration guide")
+- Every model version gets its own page (benchmarks, pricing, examples differ)
+- Hub-spoke linking concentrates link equity on pillars while spokes rank for specifics
+- Thin content prevention via mandatory unique sections (>30% unique per page)
 """
 
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
 
@@ -36,7 +43,10 @@ import anthropic
 from loguru import logger
 
 from .planner import ExamplePlan
-from .registry import get_provider_catalog
+from .registry import (
+    COMPONENT_TYPE_LABELS,
+    get_reference_hierarchy,
+)
 
 
 # =============================================================================
@@ -151,7 +161,6 @@ def _build_guide_prompt(plan: ExamplePlan, agent_py: str, utils_py: str, server_
 
         4. **Understand the audio pipeline**: Explain Plivo's μ-law 8kHz format,
            the conversions needed for each AI service. Include the hop-by-hop table.
-           This is what makes developers click — they need to understand the audio path.
 
         5. **Build the voice agent** (the core section):
            Walk through building agent.py step by step:
@@ -230,186 +239,267 @@ def _get_tags(plan: ExamplePlan) -> list[str]:
 
 
 # =============================================================================
-# Reference page generator — one page per provider
+# Reference: Provider pillar page (Component Type > Provider overview)
 # =============================================================================
 
 
-def _build_provider_reference_prompt(
+def _build_provider_pillar_prompt(
+    component_type: str,
     provider_key: str,
     provider_data: dict,
     existing_examples: list[str],
 ) -> str:
-    """Build the prompt for a per-provider reference documentation page."""
+    """Build prompt for a provider pillar page within a component type."""
     display_name = provider_data["display_name"]
+    type_label = COMPONENT_TYPE_LABELS.get(component_type, component_type.upper())
+    series_map = provider_data["series"]
 
-    # Build role summary
-    roles = []
-    if provider_data["llms"]:
-        roles.append("LLM")
-    if provider_data["stts"]:
-        roles.append("STT")
-    if provider_data["ttss"]:
-        roles.append("TTS")
-    if provider_data["voice_native"]:
-        roles.append("Speech-to-Speech (S2S)")
-    roles_str = ", ".join(roles)
+    series_summaries = []
+    for slug, sdata in series_map.items():
+        model_names = ", ".join(c.name for _, c in sdata["models"])
+        series_summaries.append(
+            f"- **{sdata['series_name']}** (slug: `{slug}`): {model_names}"
+        )
+
+    model_details = []
+    for slug, sdata in series_map.items():
+        for key, comp in sdata["models"]:
+            lines = [f"### {comp.name} (`{comp.model_id}`)"]
+            lines.append(f"- Series: {sdata['series_name']} (`{slug}`)")
+            lines.append(f"- API version: `{comp.api_version}` ({comp.api_style})")
+            if hasattr(comp, "max_tokens_param"):
+                lines.append(f"- Max tokens param: `{comp.max_tokens_param}`")
+            if hasattr(comp, "input_sample_rate"):
+                lines.append(
+                    f"- Input: {comp.input_format} at {comp.input_sample_rate}Hz"
+                )
+            if hasattr(comp, "output_sample_rate"):
+                lines.append(
+                    f"- Output: {comp.output_format} at {comp.output_sample_rate}Hz"
+                )
+            lines.append(f"- Env vars: {', '.join(comp.env_vars)}")
+            if comp.integration_notes:
+                lines.append("- Integration notes:")
+                for note in comp.integration_notes:
+                    lines.append(f"  - {note}")
+            model_details.append("\n".join(lines))
 
     seo = (
-        f"Integrate {display_name} with Plivo voice agents. "
-        f"Covers {roles_str} — configuration, audio formats, API versions, and code."
+        f"{display_name} {type_label} integration for Plivo voice agents. "
+        f"Setup, audio formats, model comparison, and code examples."
     )[:160]
 
-    # Group components by API surface/version
-    api_surfaces = []
-
-    for key, comp in provider_data["llms"]:
-        api_surfaces.append(textwrap.dedent(f"""\
-            ### LLM: {comp.name} (`{comp.model_id}`)
-            - Registry key: `{key}`
-            - API surface: `{comp.api_version}` ({comp.api_style})
-            - Max tokens param: `{comp.max_tokens_param}`
-            - Streaming: {comp.streaming}
-            - Function calling: {comp.supports_tools}
-            - Max tokens default: {comp.max_tokens_default}
-            - Env vars: {', '.join(comp.env_vars)}
-            - API docs: {comp.doc_url}
-            - Integration notes:
-            {chr(10).join(f'  - {n}' for n in comp.integration_notes)}
-        """))
-
-    for key, comp in provider_data["stts"]:
-        api_surfaces.append(textwrap.dedent(f"""\
-            ### STT: {comp.name} (`{comp.model_id or 'default'}`)
-            - Registry key: `{key}`
-            - API surface: `{comp.api_version}` ({comp.api_style})
-            - Input: {comp.input_format} at {comp.input_sample_rate}Hz
-            - Resample from Plivo 8kHz needed: {comp.needs_resample_from_plivo}
-            - Env vars: {', '.join(comp.env_vars)}
-            - API docs: {comp.doc_url}
-            - Integration notes:
-            {chr(10).join(f'  - {n}' for n in comp.integration_notes)}
-        """))
-
-    for key, comp in provider_data["ttss"]:
-        api_surfaces.append(textwrap.dedent(f"""\
-            ### TTS: {comp.name} (`{comp.voice_id_default or 'default'}`)
-            - Registry key: `{key}`
-            - API surface: `{comp.api_version}` ({comp.api_style})
-            - Output: {comp.output_format} at {comp.output_sample_rate}Hz
-            - Resample to Plivo 8kHz needed: {comp.needs_resample_to_plivo}
-            - Env vars: {', '.join(comp.env_vars)}
-            - API docs: {comp.doc_url}
-            - Integration notes:
-            {chr(10).join(f'  - {n}' for n in comp.integration_notes)}
-            {f'- Notes: {comp.notes}' if comp.notes else ''}
-        """))
-
-    for key, comp in provider_data["voice_native"]:
-        api_surfaces.append(textwrap.dedent(f"""\
-            ### S2S: {comp.name} (`{comp.model_id}`)
-            - Registry key: `{key}`
-            - API surface: `{comp.api_version}` ({comp.api_style})
-            - Input: {comp.input_format} at {comp.input_sample_rate}Hz
-            - Output: {comp.output_format} at {comp.output_sample_rate}Hz
-            - Env vars: {', '.join(comp.env_vars)}
-            - API docs: {comp.doc_url}
-            - Integration notes:
-            {chr(10).join(f'  - {n}' for n in comp.integration_notes)}
-        """))
-
-    # Identify API version groups for breaking change documentation
-    version_groups = {}
-    for key, comp in provider_data["llms"]:
-        v = comp.api_version
-        version_groups.setdefault(v, []).append((key, comp, "llm"))
-    for key, comp in provider_data["stts"]:
-        v = comp.api_version
-        version_groups.setdefault(v, []).append((key, comp, "stt"))
-    for key, comp in provider_data["ttss"]:
-        v = comp.api_version
-        version_groups.setdefault(v, []).append((key, comp, "tts"))
-    for key, comp in provider_data["voice_native"]:
-        v = comp.api_version
-        version_groups.setdefault(v, []).append((key, comp, "voice_native"))
-
-    version_info = ""
-    if len(version_groups) > 1:
-        version_info = (
-            f"\n## API version groups (IMPORTANT — different integration code)\n"
-            f"This provider has {len(version_groups)} distinct API surfaces. "
-            f"Models using different API versions require DIFFERENT integration code.\n\n"
-        )
-        for version, components in version_groups.items():
-            names = ", ".join(f"{c.name} ({role})" for _, c, role in components)
-            version_info += f"- **`{version}`**: {names}\n"
-        version_info += (
-            "\nEach API surface MUST have its own integration section with "
-            "separate code snippets, connection setup, and message formats.\n"
-        )
+    series_pages = "\n".join(
+        f"- [{sdata['series_name']}]"
+        f"(/docs/reference/{component_type}/{provider_key}/{slug})"
+        for slug, sdata in series_map.items()
+    )
 
     return textwrap.dedent(f"""\
-        Write a reference documentation page for plivo.com/docs about {display_name}.
+        Write a PROVIDER PILLAR reference page for plivo.com/docs.
 
-        This is a PER-PROVIDER page. It covers ALL roles {display_name} serves
-        in a Plivo voice agent: {roles_str}.
+        Provider: {display_name}
+        Component type: {type_label}
+        This page lives at: `reference/{component_type}/{provider_key}`
 
         ## Frontmatter
         ```yaml
         ---
-        title: "{display_name} Integration for Plivo Voice Agents"
+        title: "{display_name} {type_label} Integration for Plivo Voice Agents"
         description: "{seo}"
-        slug: "reference/{provider_key}"
+        slug: "reference/{component_type}/{provider_key}"
         sidebar_label: "{display_name}"
-        tags: [voice-agent, reference, {provider_key}, {', '.join(r.lower() for r in roles)}]
+        tags: [voice-agent, reference, {component_type}, {provider_key}]
         ---
         ```
 
-        ## All components from this provider
-        {chr(10).join(api_surfaces)}
-        {version_info}
+        ## Model series under this provider
+        {chr(10).join(series_summaries)}
 
-        ## Page structure
+        ## All models
+        {chr(10).join(model_details)}
 
-        1. **Provider overview**: What {display_name} offers for voice agents.
-           Which roles it serves ({roles_str}). Auth setup (API key, env var).
+        ## Page structure (PILLAR PAGE)
 
-        2. **Quick capabilities table**: All components side-by-side.
-           Columns: Role | Component | API Surface | Protocol | Audio Format | Key Spec
+        This is a HUB page. It provides an overview and links to detailed series pages.
 
-        3. **Per-API-surface sections** (H2 each):
-           Group by API surface/version, NOT by individual model. For example, if
-           this provider has chat-v1 and chat-v2 LLMs, those are TWO sections with
-           different integration code. If it has a Realtime S2S API, that's another section.
+        1. **Provider overview** (2-3 paragraphs):
+           What {display_name} offers for {type_label} in voice agents.
+           Auth setup (API key env var, how to obtain).
 
-           For each API surface:
-           a. Which models use this surface (with a model table if multiple)
-           b. Connection setup (endpoint, auth, WebSocket URL or HTTP endpoint)
-           c. Message format / request structure
-           d. Audio format details (if applicable)
-           e. Integration code snippet (15-30 lines of REAL code)
-           f. **Breaking changes** between model versions using THIS surface
-              (e.g., `max_tokens` → `max_completion_tokens` for OpenAI chat-v2)
-           g. Example projects that use this API surface
+        2. **Model series comparison table**:
+           All series side-by-side. Columns vary by component type:
+           - LLM: Series | Models | API Version | Max Tokens Param | Tools | Key Difference
+           - STT: Series | Models | Protocol | Sample Rate | Resample Needed | Key Difference
+           - TTS: Series | Models | Protocol | Output Rate | Output Format | Key Difference
+           - S2S: Series | Models | Protocol | In/Out Rate | Key Difference
 
-        4. **Audio format compatibility** (if provider has STT/TTS/S2S):
-           What conversion is needed between this provider and Plivo 8kHz μ-law.
-           Include the conversion function names (plivo_to_X, X_to_plivo).
+        3. **Common integration pattern**:
+           Code shared across ALL series (auth, connection setup, imports).
+           Show 15-20 lines of REAL code patterns.
 
-        5. **Migration guide** (if multiple API versions exist):
-           What changes when upgrading from one API version to another.
-           Concrete diff of what code lines change.
+        4. **Audio format** (if STT/TTS/S2S):
+           Plivo 8kHz μ-law ↔ this provider's format.
+           Conversion function names (plivo_to_X, X_to_plivo).
 
-        ## Rules
-        - Organize by API surface, not by model. Models are config; API surfaces are code.
-        - When two models share the SAME API surface (same code, different model_id),
-          list them in a single table within that section — don't repeat the integration.
-        - When models require DIFFERENT code (different API version), they MUST be in
-          separate sections with separate code snippets.
-        - Highlight breaking changes with `> **Breaking change**: ...` callouts
-        - Code snippets should show REAL patterns from the example codebase
-        - Cross-link to guides: [Build with X + Y + Z](/docs/guides/{{example-name}})
-        - Cross-link to concepts: [Audio Pipeline](/docs/concepts/audio-pipeline)
-        - SEO: use "{display_name} Plivo voice agent" naturally in headings
+        5. **Model series pages** (links):
+           {series_pages}
+
+        6. **Related guides**: Link to example guides using this provider.
+
+        ## Internal linking rules
+        - Link to each model series spoke page
+        - Link to concept pages: [Audio Pipeline](/docs/concepts/audio-pipeline)
+        - Do NOT link to other providers' pages (keeps link equity in this cluster)
+        - SEO: use "{display_name} {type_label} Plivo voice agent" in headings
+
+        ## Existing examples in the repo
+        {', '.join(existing_examples)}
+
+        Output ONLY the page markdown (including frontmatter). No wrapping fences.
+    """)
+
+
+# =============================================================================
+# Reference: Model series spoke page (Component Type > Provider > Series)
+# =============================================================================
+
+
+def _build_model_series_prompt(
+    component_type: str,
+    provider_key: str,
+    series_slug: str,
+    series_data: dict,
+    provider_display: str,
+    existing_examples: list[str],
+) -> str:
+    """Build prompt for a model series spoke page.
+
+    Includes mandatory unique sections to prevent thin content.
+    """
+    type_label = COMPONENT_TYPE_LABELS.get(component_type, component_type.upper())
+    series_name = series_data["series_name"]
+    models = series_data["models"]
+
+    model_details = []
+    all_integration_notes = []
+    for key, comp in models:
+        lines = [f"### {comp.name} (`{comp.model_id}`)"]
+        lines.append(f"- Registry key: `{key}`")
+        lines.append(f"- API version: `{comp.api_version}` ({comp.api_style})")
+        if hasattr(comp, "max_tokens_param"):
+            lines.append(f"- Max tokens param: `{comp.max_tokens_param}`")
+        if hasattr(comp, "streaming"):
+            lines.append(f"- Streaming: {comp.streaming}")
+        if hasattr(comp, "supports_tools"):
+            lines.append(f"- Function calling: {comp.supports_tools}")
+        if hasattr(comp, "input_sample_rate"):
+            lines.append(f"- Input: {comp.input_format} at {comp.input_sample_rate}Hz")
+            lines.append(f"- Resample from Plivo: {comp.needs_resample_from_plivo}")
+        if hasattr(comp, "output_sample_rate"):
+            out_fmt = getattr(comp, "output_format", "unknown")
+            lines.append(f"- Output: {out_fmt} at {comp.output_sample_rate}Hz")
+            if hasattr(comp, "needs_resample_to_plivo"):
+                lines.append(f"- Resample to Plivo: {comp.needs_resample_to_plivo}")
+        lines.append(f"- Env vars: {', '.join(comp.env_vars)}")
+        lines.append(f"- API docs: {comp.doc_url}")
+        model_details.append("\n".join(lines))
+        all_integration_notes.extend(comp.integration_notes)
+
+    notes_block = (
+        "\n".join(f"- {n}" for n in all_integration_notes)
+        if all_integration_notes else "None provided."
+    )
+
+    seo = (
+        f"{series_name} — {provider_display} {type_label} on Plivo. "
+        f"Integration, benchmarks, migration guide, and examples."
+    )[:160]
+
+    pillar_link = f"/docs/reference/{component_type}/{provider_key}"
+
+    return textwrap.dedent(f"""\
+        Write a MODEL SERIES SPOKE reference page for plivo.com/docs.
+
+        Series: {series_name}
+        Provider: {provider_display}
+        Component type: {type_label}
+        This page lives at: `reference/{component_type}/{provider_key}/{series_slug}`
+
+        ## Frontmatter
+        ```yaml
+        ---
+        title: "{series_name} — {provider_display} {type_label} on Plivo"
+        description: "{seo}"
+        slug: "reference/{component_type}/{provider_key}/{series_slug}"
+        sidebar_label: "{series_name}"
+        tags: [voice-agent, reference, {component_type}, {provider_key}, {series_slug}]
+        ---
+        ```
+
+        ## Models in this series
+        {chr(10).join(model_details)}
+
+        ## Integration notes from registry
+        {notes_block}
+
+        ## MANDATORY page structure (spoke page — THIN CONTENT PREVENTION)
+
+        Every section below is REQUIRED. These sections ensure >30% unique content
+        that cannot be duplicated across other model series pages.
+
+        1. **Breadcrumb / back link**:
+           `[← {provider_display} {type_label} Overview]({pillar_link})`
+
+        2. **Series overview** (2-3 sentences):
+           What makes {series_name} different from other series by this provider.
+           When to choose this series over alternatives.
+
+        3. **Model variants table** (UNIQUE per series):
+           All models in this series with specs.
+           Columns: Model | model_id | Context Window | Max Output | Cost Tier | Speed
+
+        4. **Breaking changes from previous series** (UNIQUE per series):
+           What changed from the prior series. Be specific:
+           - Parameter renames (e.g., `max_tokens` → `max_completion_tokens`)
+           - Endpoint changes, auth changes, response format changes
+           - If this is the first/only series, write "Initial release — no breaking changes."
+           Use `> **Breaking change**: ...` callout blocks.
+
+        5. **Integration code** (15-30 lines):
+           Complete connection + streaming code for this specific series.
+           Must use the EXACT model_id and parameters for this series.
+
+        6. **Audio format** (if STT/TTS/S2S):
+           Conversion details specific to this series.
+
+        7. **Benchmarks & capabilities** (UNIQUE per series):
+           What this series excels at vs others.
+           Speed, accuracy, language support, tool calling quality.
+           Include concrete numbers where available.
+
+        8. **Pricing & rate limits** (UNIQUE per series):
+           Pricing tier for this series.
+           Tokens per minute, requests per minute limits.
+
+        9. **Migration guide** (UNIQUE per series):
+           Concrete code diff showing what lines change when upgrading
+           TO this series from the previous one.
+           Show before/after code blocks.
+           If first series: "This is the baseline — see newer series for migration guides."
+
+        10. **Known issues & workarounds** (UNIQUE per series):
+            Version-specific edge cases, bugs, limitations.
+            If none known: "No known issues at this time."
+
+        11. **Example projects** (UNIQUE per series):
+            Links to example directories in the repo that use this specific series.
+
+        ## Internal linking rules
+        - MUST link back to provider pillar: [{provider_display} {type_label}]({pillar_link})
+        - Do NOT link to other providers' pages
+        - Cross-link to concept pages where relevant
+        - SEO: use "{series_name} {provider_display} Plivo voice agent" in headings
 
         ## Existing examples in the repo
         {', '.join(existing_examples)}
@@ -466,7 +556,7 @@ class PlivoDocsGenerator:
 
     Produces three content types:
     - Guides: per-stack tutorials (one per example)
-    - Reference: per-provider pages (OpenAI, Deepgram, etc.)
+    - Reference: Component Type → Provider pillar → Model Series spoke
     - Concepts: architecture and decision pages
     """
 
@@ -476,11 +566,12 @@ class PlivoDocsGenerator:
         self.client = anthropic.Anthropic()
         self.docs_dir = repo_root / ".automation" / "docs"
 
+    # ----- Guides -----
+
     def generate_guide(self, plan: ExamplePlan) -> str:
         """Generate a guide for a specific example."""
         logger.info(f"Generating Plivo docs guide for {plan.dir_name}")
 
-        # Read source files for code snippets
         example_dir = self.repo_root / plan.dir_name
         agent_py = self._read(example_dir / "inbound" / "agent.py")
         utils_py = self._read(example_dir / "utils.py")
@@ -493,34 +584,109 @@ class PlivoDocsGenerator:
         prompt = _build_guide_prompt(plan, agent_py, utils_py, server_py)
         return self._call_claude(prompt, "guide")
 
-    def generate_provider_reference(self, provider_key: str) -> str:
-        """Generate a reference page for a specific provider.
+    # ----- Reference: provider pillar -----
 
-        One page per provider, covering all roles (LLM, STT, TTS, S2S) and
-        all API surfaces with versioned integration sections.
-        """
-        catalog = get_provider_catalog()
-        provider_data = catalog.get(provider_key)
+    def generate_provider_pillar(self, component_type: str, provider_key: str) -> str:
+        """Generate a provider pillar page under a component type."""
+        hierarchy = get_reference_hierarchy()
+        type_data = hierarchy.get(component_type, {})
+        provider_data = type_data.get(provider_key)
         if not provider_data:
-            available = ", ".join(sorted(catalog.keys()))
+            available = ", ".join(sorted(type_data.keys()))
             raise ValueError(
-                f"Unknown provider: {provider_key}. Available: {available}"
+                f"Unknown provider '{provider_key}' for {component_type}. "
+                f"Available: {available}"
+            )
+
+        logger.info(f"Generating pillar: reference/{component_type}/{provider_key}")
+
+        existing = self._list_examples()
+        prompt = _build_provider_pillar_prompt(
+            component_type, provider_key, provider_data, existing
+        )
+        return self._call_claude(prompt, "reference")
+
+    # ----- Reference: model series spoke -----
+
+    def generate_model_series_page(
+        self, component_type: str, provider_key: str, series_slug: str,
+    ) -> str:
+        """Generate a model series spoke page."""
+        hierarchy = get_reference_hierarchy()
+        type_data = hierarchy.get(component_type, {})
+        provider_data = type_data.get(provider_key)
+        if not provider_data:
+            raise ValueError(f"Unknown provider '{provider_key}' for {component_type}")
+
+        series_data = provider_data["series"].get(series_slug)
+        if not series_data:
+            available = ", ".join(sorted(provider_data["series"].keys()))
+            raise ValueError(
+                f"Unknown series '{series_slug}' for "
+                f"{provider_key}/{component_type}. Available: {available}"
             )
 
         logger.info(
-            f"Generating Plivo docs reference for provider: "
-            f"{provider_data['display_name']}"
+            f"Generating series: "
+            f"reference/{component_type}/{provider_key}/{series_slug}"
         )
 
-        existing = [
-            d.name for d in self.repo_root.iterdir()
-            if d.is_dir() and not d.name.startswith(".")
-        ]
-
-        prompt = _build_provider_reference_prompt(
-            provider_key, provider_data, existing
+        existing = self._list_examples()
+        prompt = _build_model_series_prompt(
+            component_type, provider_key, series_slug,
+            series_data, provider_data["display_name"], existing,
         )
         return self._call_claude(prompt, "reference")
+
+    # ----- Reference: provider (pillar + all series) -----
+
+    def generate_provider_references(
+        self, component_type: str, provider_key: str,
+    ) -> dict[str, str]:
+        """Generate pillar + all series pages for one provider.
+
+        Returns dict like:
+            {"llm/openai": "...", "llm/openai/gpt-4.1": "...", ...}
+        """
+        hierarchy = get_reference_hierarchy()
+        provider_data = hierarchy.get(component_type, {}).get(provider_key)
+        if not provider_data:
+            raise ValueError(
+                f"Unknown provider '{provider_key}' for {component_type}"
+            )
+
+        results = {}
+
+        pillar_key = f"{component_type}/{provider_key}"
+        results[pillar_key] = self.generate_provider_pillar(
+            component_type, provider_key
+        )
+
+        for series_slug in provider_data["series"]:
+            series_key = f"{component_type}/{provider_key}/{series_slug}"
+            results[series_key] = self.generate_model_series_page(
+                component_type, provider_key, series_slug,
+            )
+
+        return results
+
+    # ----- Reference: all -----
+
+    def generate_all_references(self) -> dict[str, str]:
+        """Generate ALL reference pages across all types/providers/series."""
+        hierarchy = get_reference_hierarchy()
+        results = {}
+
+        for comp_type in sorted(hierarchy.keys()):
+            for provider_key in sorted(hierarchy[comp_type].keys()):
+                provider_results = self.generate_provider_references(
+                    comp_type, provider_key,
+                )
+                results.update(provider_results)
+
+        return results
+
+    # ----- Concepts -----
 
     def generate_concept(self, topic_key: str) -> str:
         """Generate a concept page."""
@@ -528,19 +694,13 @@ class PlivoDocsGenerator:
 
         topic = CONCEPT_TOPICS.get(topic_key)
         if not topic:
-            raise ValueError(f"Unknown concept topic: {topic_key}. "
-                             f"Available: {list(CONCEPT_TOPICS.keys())}")
+            raise ValueError(
+                f"Unknown concept topic: {topic_key}. "
+                f"Available: {list(CONCEPT_TOPICS.keys())}"
+            )
 
         prompt = _build_concept_prompt(topic_key, topic)
         return self._call_claude(prompt, "concept")
-
-    def generate_all_references(self) -> dict[str, str]:
-        """Generate reference pages for all providers."""
-        catalog = get_provider_catalog()
-        results = {}
-        for provider_key in sorted(catalog.keys()):
-            results[provider_key] = self.generate_provider_reference(provider_key)
-        return results
 
     def generate_all_concepts(self) -> dict[str, str]:
         """Generate all concept pages."""
@@ -549,13 +709,18 @@ class PlivoDocsGenerator:
             results[topic_key] = self.generate_concept(topic_key)
         return results
 
+    # ----- Write docs to disk -----
+
     def write_docs(
         self,
         guides: dict[str, str] | None = None,
         references: dict[str, str] | None = None,
         concepts: dict[str, str] | None = None,
     ) -> Path:
-        """Write all generated docs to disk."""
+        """Write all generated docs to disk.
+
+        references keys are paths like "llm/openai" or "llm/openai/gpt-4.1".
+        """
         if guides:
             guides_dir = self.docs_dir / "guides"
             guides_dir.mkdir(parents=True, exist_ok=True)
@@ -565,10 +730,11 @@ class PlivoDocsGenerator:
 
         if references:
             ref_dir = self.docs_dir / "reference"
-            ref_dir.mkdir(parents=True, exist_ok=True)
-            for provider_key, content in references.items():
-                (ref_dir / f"{provider_key}.md").write_text(content)
-                logger.info(f"  Wrote reference: {provider_key}.md")
+            for path_key, content in references.items():
+                out_path = ref_dir / f"{path_key}.md"
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(content)
+                logger.info(f"  Wrote reference: {path_key}.md")
 
         if concepts:
             concepts_dir = self.docs_dir / "concepts"
@@ -577,10 +743,10 @@ class PlivoDocsGenerator:
                 (concepts_dir / f"{topic}.md").write_text(content)
                 logger.info(f"  Wrote concept: {topic}.md")
 
-        # Generate sidebar/navigation config
         self._write_sidebar(guides or {}, references or {}, concepts or {})
-
         return self.docs_dir
+
+    # ----- Sidebar: Mintlify nested navigation -----
 
     def _write_sidebar(
         self,
@@ -588,42 +754,70 @@ class PlivoDocsGenerator:
         references: dict[str, str],
         concepts: dict[str, str],
     ) -> None:
-        """Generate a sidebar navigation file for the docs site."""
-        # For references, use provider display names from catalog
-        catalog = get_provider_catalog()
-        ref_items = []
-        for provider_key in references:
-            display = catalog.get(provider_key, {}).get("display_name", provider_key.title())
-            ref_items.append({
-                "type": "doc",
-                "id": f"reference/{provider_key}",
-                "label": display,
-            })
+        """Generate Mintlify-compatible docs.json with nested groups."""
+        hierarchy = get_reference_hierarchy()
+
+        ref_categories = []
+        for comp_type in ["llm", "stt", "tts", "s2s"]:
+            if comp_type not in hierarchy:
+                continue
+            type_label = COMPONENT_TYPE_LABELS.get(comp_type, comp_type.upper())
+
+            provider_groups = []
+            for prov_key, prov_data in sorted(hierarchy[comp_type].items()):
+                pillar_path = f"reference/{comp_type}/{prov_key}"
+                if pillar_path not in references:
+                    continue
+
+                items = [pillar_path]
+                for series_slug in sorted(prov_data["series"].keys()):
+                    series_path = (
+                        f"reference/{comp_type}/{prov_key}/{series_slug}"
+                    )
+                    if series_path in references:
+                        items.append(series_path)
+
+                provider_groups.append({
+                    "group": prov_data["display_name"],
+                    "pages": items,
+                })
+
+            if provider_groups:
+                ref_categories.append({
+                    "group": type_label,
+                    "pages": provider_groups,
+                })
 
         sidebar = {
-            "docs": [
+            "navigation": [
                 {
-                    "type": "category",
-                    "label": "Concepts",
-                    "items": [f"concepts/{k}" for k in concepts],
+                    "group": "Concepts",
+                    "pages": [f"concepts/{k}" for k in concepts],
                 },
                 {
-                    "type": "category",
-                    "label": "Provider Reference",
-                    "items": ref_items,
+                    "group": "Reference",
+                    "pages": ref_categories,
                 },
                 {
-                    "type": "category",
-                    "label": "Guides",
-                    "items": [f"guides/{k}" for k in guides],
+                    "group": "Guides",
+                    "pages": [f"guides/{k}" for k in guides],
                 },
             ]
         }
 
-        import json
-        sidebar_path = self.docs_dir / "sidebar.json"
+        sidebar_path = self.docs_dir / "docs.json"
+        sidebar_path.parent.mkdir(parents=True, exist_ok=True)
         sidebar_path.write_text(json.dumps(sidebar, indent=2) + "\n")
-        logger.info("  Wrote sidebar.json")
+        logger.info("  Wrote docs.json (Mintlify navigation)")
+
+    # ----- Helpers -----
+
+    def _list_examples(self) -> list[str]:
+        """List existing example directories in the repo."""
+        return [
+            d.name for d in self.repo_root.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        ]
 
     def _read(self, path: Path) -> str:
         """Read a file, return empty string if not found."""
@@ -660,7 +854,6 @@ class PlivoDocsGenerator:
             )
             content = response.content[0].text
 
-            # Strip wrapping fences
             lines = content.strip().split("\n")
             if lines and lines[0].strip().startswith("```"):
                 lines = lines[1:]
