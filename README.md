@@ -43,6 +43,7 @@ These examples wire up separate providers for speech-to-text, language model, an
 | [gemini2-deepgramnova2-elevenflashv2.5-native](./gemini2-deepgramnova2-elevenflashv2.5-native/) | Deepgram Nova 2 | Gemini 2 | ElevenLabs Flash v2.5 | None |
 | [gpt4o-deepgramnova3-openaitts4o-pipecat](./gpt4o-deepgramnova3-openaitts4o-pipecat/) | Deepgram Nova 3 | GPT-4o | OpenAI TTS 4o | Pipecat |
 | [gpt5.4-assemblyaiu3-cartesiasonic3-native](./gpt5.4-assemblyaiu3-cartesiasonic3-native/) | AssemblyAI U3 | GPT 5.4 | Cartesia Sonic 3 | None |
+| [gpt5.4-metamusetranscribe1-cartesiasonic3-native](./gpt5.4-metamusetranscribe1-cartesiasonic3-native/) | Meta Muse Voice Transcribe 1.0 (diarization + endpointing) | GPT 5.4 | Cartesia Sonic 3 | None |
 | [daily-plivo](./daily-plivo/) | Deepgram | OpenAI | Cartesia | Pipecat + Daily |
 
 ## Prerequisites
