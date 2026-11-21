@@ -31,6 +31,7 @@ These examples use models that handle both speech input and output natively — 
 | [gemini2.5-live-native](./gemini2.5-live-native/) | Gemini 2.5 Live | None | Direct API integration, function calling, auto-webhook config |
 | [gemini2.5-live-pipecat](./gemini2.5-live-pipecat/) | Gemini 2.5 Live | Pipecat | Modular pipeline, built-in VAD, less code |
 | [gptrealtime1.5-native](./gptrealtime1.5-native/) | GPT Realtime 1.5 | None | Silero VAD, barge-in support, function calling |
+| [gptlive1.1-native-no-vad](./gptlive1.1-native-no-vad/) | GPT-Live 1.1 | None | Full-duplex speech-to-speech, μ-law 8kHz end to end (no transcoding), model-owned turn-taking, tools via Responses delegation |
 | [grok3-voice-native](./grok3-voice-native/) | Grok 3 Voice | None | Silero VAD, barge-in support, function calling |
 
 ### Managed Voice-Agent Platforms

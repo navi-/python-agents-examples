@@ -21,7 +21,7 @@ Before creating any files, verify `{example-name}` follows the naming convention
 **LLM:** `{provider}{version}` — drop size class unless two sizes used together
 - `gpt5.4`, `gpt4.1`, `gpt4o`, `gemini2`, `grok3`
 - Dual-LLM: `gpt4.1mini-gpt4.1` (two sizes → keep both)
-- S2S/multimodal: `gemini2.5-live`, `gemini3.1-live`, `gptrealtime1.5`, `grok3-voice`
+- S2S/multimodal: `gemini2.5-live`, `gemini3.1-live`, `gptrealtime1.5`, `gptlive1.1`, `grok3-voice`
 
 **STT:** `{provider}{model-name}{version}`
 - `deepgramnova2`, `deepgramnova3`, `deepgramflux`, `assemblyaiu3`, `modulatevelma2`, `sarvam`

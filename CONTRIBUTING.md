@@ -22,6 +22,7 @@ Drop the size class (mini/nano/pro/flash) unless two different sizes are used to
 | `gpt-4.1-mini` + `gpt-4.1` (dual) | `gpt4.1mini-gpt4.1` | two sizes → keep both |
 | `gemini-2.5-flash` (live API) | `gemini2.5-live` | drop "flash"; `-live` = S2S API |
 | `gpt-realtime-1.5` (S2S) | `gptrealtime1.5` | "realtime" is the model name |
+| `gpt-live-1.1` (S2S, full duplex) | `gptlive1.1` | "live" is the model name |
 | `grok-3-fast-voice` (S2S) | `grok3-voice` | |
 
 ### STT/TTS: `{provider}{model-name}{version}`

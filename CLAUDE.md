@@ -23,6 +23,7 @@ Drop the size class (mini/nano/pro/flash) — it's `.env` config. Only include s
 | `gemini-2.5-flash` (live API) | `gemini2.5-live` | drop "flash"; `-live` = S2S API type |
 | `gemini-3.1-flash` (live API) | `gemini3.1-live` | drop "flash"; `-live` = S2S API type |
 | `gpt-realtime-1.5` (S2S) | `gptrealtime1.5` | "realtime" is the model name |
+| `gpt-live-1.1` (S2S, full duplex) | `gptlive1.1` | "live" is the model name |
 | `grok-3-fast-voice` (S2S) | `grok3-voice` | |
 
 ### Voice AI (STT) component: `{provider}{model-name}{version}`
@@ -159,7 +160,7 @@ Audio helpers, by name:
 | **Native**, API needs PCM or another rate | Codec set, both wrappers, Silero set | `grok3-voice-native/` |
 | **Native `-no-vad`** | Codec set, both wrappers. No VAD code | `gemini2.5-live-native-no-vad/` |
 | **Native `-webrtcvad`** | Codec set, both wrappers. No Silero set: the `webrtcvad.Vad` instance lives in `agent.py` and is fed `ulaw_to_pcm` output at 8kHz | `gemini2.5-live-native-webrtcvad/` |
-| **Native or managed platform, μ-law 8kHz end to end** (API accepts and emits Plivo's own format, no client-side VAD) | Both wrappers as documented pass-throughs (the body returns its argument). Codec set, decode table and sample-rate constants omitted | `deepgram-voiceagent/` (Deepgram Voice Agent configured for `mulaw` 8000 in and out) |
+| **Native or managed platform, μ-law 8kHz end to end** (API accepts and emits Plivo's own format, no client-side VAD) | Both wrappers as documented pass-throughs (the body returns its argument). Codec set, decode table and sample-rate constants omitted | `deepgram-voiceagent/` (Deepgram Voice Agent configured for `mulaw` 8000 in and out), `gptlive1.1-native-no-vad/` (GPT-Live `audio/pcmu` 8000) |
 | **Managed platform** configured for PCM or another rate | Codec set, both wrappers. No VAD code | none yet |
 | **Framework** (pipecat / livekit), serializer or transport converts | Nothing | `gpt4o-modulatevelma2-cartesiasonic3-pipecat/` (`PlivoFrameSerializer`) |
 | **Framework** whose own code touches raw audio (a custom processor or service that decodes, encodes or resamples) | The helpers that code calls, defined in `utils.py` and imported from there | none yet |
