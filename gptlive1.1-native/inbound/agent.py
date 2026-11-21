@@ -1,4 +1,4 @@
-"""Inbound voice agent — OpenAI GPT-Live (full-duplex speech-to-speech).
+"""Inbound voice agent: OpenAI GPT-Live (full-duplex speech-to-speech).
 
 Native orchestration: one raw WebSocket to the GPT-Live API, a full-duplex voice model
 that listens while it speaks and owns turn-taking, backchannels and interruptions:
@@ -21,9 +21,9 @@ backend model (OPENAI_DELEGATION_MODEL), whose function calls arrive wrapped in
 ``response.create``.
 
 Pipeline logging is controlled by the LOG_LEVEL env var:
-  verbose — every pipeline event: GPT-Live events, packet counts, queue sizes
-  normal  — key events: turn lifecycle, transcripts, tool calls (default)
-  quiet   — errors and session start/end only
+  verbose: every pipeline event: GPT-Live events, packet counts, queue sizes
+  normal : key events: turn lifecycle, transcripts, tool calls (default)
+  quiet  : errors and session start/end only
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# OTel tracing (optional — no-op when opentelemetry is not installed)
+# OTel tracing (optional: no-op when opentelemetry is not installed)
 # ---------------------------------------------------------------------------
 try:
     from opentelemetry import trace as _otel_trace
@@ -133,6 +133,9 @@ SESSION_START_TIMEOUT_S = 10.0  # Max wait for session.started
 SESSION_CLOSE_TIMEOUT_S = 3.0  # Max wait for session.closed (final usage) at teardown
 PRE_START_BUFFER_MAX = 16000  # 2s of μ-law 8kHz buffered before session.started
 HOUSEKEEPING_INTERVAL_S = 0.1
+# The agent's transcript arrives as fragments with no end marker: its text is shown
+# (agent_text event) once no fragment has arrived for this long.
+AGENT_TEXT_QUIET_S = 1.0
 # Barge-in: flush only when at least this much agent audio is still unplayed. GPT-Live
 # stops talking by itself; this discards what was already buffered here and at Plivo.
 BARGE_IN_FLUSH_BACKLOG_MS = 300
@@ -180,7 +183,7 @@ DELEGATION_INSTRUCTIONS = (
 )
 
 # =============================================================================
-# Tool Functions — replace these with your actual implementations
+# Tool Functions: replace these with your actual implementations
 # =============================================================================
 
 
@@ -462,32 +465,35 @@ class GPTLiveVoiceAgent:
         self._turn_barge_in = False
         self._turn_response_gap_ms: int | None = None
         self._user_end_ms: int | None = None  # session-timeline end of the caller's speech
+        self._user_text_emitted = False
+        self._agent_text_emitted_len = 0  # chars of _turn_agent_text already shown
+        self._last_agent_fragment = 0.0  # monotonic time of the last agent fragment
 
     # -- Structured logging with call ID, elapsed time, and pipeline stage --
 
-    def _log(self, stage: str, msg: str) -> None:
-        """Log at 'normal' level — key pipeline events."""
+    def _log(self, stage: str, msg: str, **extra: object) -> None:
+        """Log at 'normal' level: key pipeline events."""
         if LOG_LEVEL == "quiet":
             return
         elapsed = round(time.monotonic() - self._session_start, 2)
-        self._logger.bind(elapsed_s=elapsed, stage=stage).info(
+        self._logger.bind(elapsed_s=elapsed, stage=stage, **extra).info(
             f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
         )
 
-    def _logv(self, stage: str, msg: str) -> None:
-        """Log at 'verbose' level — detailed debugging info."""
+    def _logv(self, stage: str, msg: str, **extra: object) -> None:
+        """Log at 'verbose' level: detailed debugging info."""
         if LOG_LEVEL != "verbose":
             return
         elapsed = round(time.monotonic() - self._session_start, 2)
-        self._logger.bind(elapsed_s=elapsed, stage=stage).debug(
+        self._logger.bind(elapsed_s=elapsed, stage=stage, **extra).debug(
             f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
         )
 
-    def _loge(self, stage: str, msg: str) -> None:
-        """Log errors — always visible regardless of LOG_LEVEL."""
+    def _loge(self, stage: str, msg: str, **extra: object) -> None:
+        """Log errors: always visible regardless of LOG_LEVEL."""
         self._error_count += 1
         elapsed = round(time.monotonic() - self._session_start, 2)
-        self._logger.bind(elapsed_s=elapsed, stage=stage).error(
+        self._logger.bind(elapsed_s=elapsed, stage=stage, **extra).error(
             f"[{self.call_id}] [{elapsed:7.2f}s] [{stage}] {msg}"
         )
 
@@ -572,22 +578,21 @@ You can use the caller's phone number for SMS or callbacks without asking."""
         """Run the voice agent session."""
         self._session_start = time.monotonic()
         self._running = True
-        # Session start always logs (even in quiet mode)
-        self._logger.info(
-            f"[{self.call_id}] [  0.00s] [session] "
-            f"started (from={self.from_number}, to={self.to_number}, log={LOG_LEVEL}, "
-            f"model={OPENAI_LIVE_MODEL}, delegation={OPENAI_DELEGATION_MODEL})"
-        )
+        # Session start always logs (even in quiet mode), so it does not go through _log.
+        # One line carries both the console message and the call_answered event.
         self._logger.bind(
             event="call_answered",
-            call_id=self.parent_call_id,
-            leg_call_id=self.call_id,
+            elapsed_s=0.0,
+            stage="session",
             from_number=self.from_number,
             to_number=self.to_number,
             sip_headers=self.sip_headers,
             stream_id=self._stream_id,
         ).info(
-            f"[{self.call_id}] [  0.00s] [session] call answered (sip_headers={self.sip_headers})"
+            f"[{self.call_id}] [  0.00s] [session] "
+            f"started (from={self.from_number}, to={self.to_number}, log={LOG_LEVEL}, "
+            f"model={OPENAI_LIVE_MODEL}, delegation={OPENAI_DELEGATION_MODEL}, "
+            f"sip_headers={self.sip_headers})"
         )
         if _otel_trace is not None:
             _otel_trace.get_current_span().set_attributes(
@@ -917,19 +922,12 @@ You can use the caller's phone number for SMS or callbacks without asking."""
                 self._on_agent_reply_started(evt.get("start_ms"))
                 self._speaker = "agent"
             self._turn_agent_text += delta
+            self._last_agent_fragment = time.monotonic()
             self._logv("turn", f"agent fragment: {delta!r}")
 
     def _on_agent_reply_started(self, start_ms: Any) -> None:
         """First agent fragment of a turn: the caller's text is complete, log it."""
-        user_text = self._turn_user_text.strip()
-        if user_text:
-            self._log("turn", f"turn {self._turn_count}: user '{user_text[:80]}'")
-            self._logger.bind(
-                event="user_text",
-                call_id=self.parent_call_id,
-                turn=self._turn_count,
-                text=user_text,
-            ).info(f"[{self.call_id}] user_text turn {self._turn_count}: '{user_text[:60]}'")
+        self._emit_user_text()
         if isinstance(start_ms, int) and self._user_end_ms is not None:
             # Gap on GPT-Live's own timeline: end of caller speech -> start of the reply
             self._turn_response_gap_ms = start_ms - self._user_end_ms
@@ -968,26 +966,56 @@ You can use the caller's phone number for SMS or callbacks without asking."""
         self._turn_barge_in = True
         self._log("barge_in", f"flushed {backlog_ms}ms of unplayed agent audio (queue={cleared})")
 
+    def _emit_user_text(self) -> None:
+        """Show the caller's text of the open turn (user_text event), once per turn."""
+        user_text = self._turn_user_text.strip()
+        if not user_text or self._user_text_emitted:
+            return
+        self._user_text_emitted = True
+        self._log(
+            "turn",
+            f"turn {self._turn_count}: user '{user_text[:80]}'",
+            event="user_text",
+            turn=self._turn_count,
+            text=user_text,
+        )
+
+    def _emit_agent_text(self) -> None:
+        """Show the agent's text of the open turn that was not shown yet (agent_text event).
+
+        Called when the agent's transcript goes quiet, so the text is visible while the
+        caller listens instead of only when the turn closes. Text that arrives later in
+        the same turn (the agent resumed) is emitted as its own line by the next call.
+        """
+        agent_text = self._turn_agent_text[self._agent_text_emitted_len :].strip()
+        if not agent_text:
+            return
+        self._agent_text_emitted_len = len(self._turn_agent_text)
+        self._log(
+            "llm",
+            f"turn {self._turn_count}: agent '{agent_text[:80]}'",
+            event="agent_text",
+            turn=self._turn_count,
+            text=agent_text,
+        )
+
     def _finish_turn(self) -> None:
-        """Close the open turn: log the agent's text and emit turn_complete."""
+        """Close the open turn: show any text not shown yet and emit turn_complete."""
         if self._turn_count == 0 or not (self._turn_user_text or self._turn_agent_text):
             return
-        agent_text = self._turn_agent_text.strip()
-        if agent_text:
-            self._log("turn", f"turn {self._turn_count}: agent '{agent_text[:80]}'")
-            self._logger.bind(
-                event="agent_text",
-                call_id=self.parent_call_id,
-                turn=self._turn_count,
-                text=agent_text,
-            ).info(f"[{self.call_id}] agent_text turn {self._turn_count}: '{agent_text[:60]}'")
-        self._emit_turn_complete()
+        # Whatever was not shown yet: a caller turn the agent never answered, and agent
+        # text that arrived after the quiet-period emit
+        self._emit_user_text()
+        self._emit_agent_text()
+        self._emit_turn_complete(barge_in=self._turn_barge_in)
         self._speaker = None
         self._turn_user_text = ""
         self._turn_agent_text = ""
         self._turn_barge_in = False
         self._turn_response_gap_ms = None
         self._user_end_ms = None
+        self._user_text_emitted = False
+        self._agent_text_emitted_len = 0
 
     # -- Delegation (tools) --
 
@@ -1240,6 +1268,15 @@ You can use the caller's phone number for SMS or callbacks without asking."""
             with contextlib.suppress(Exception):
                 await self._flush_tool_outputs()
 
+        if (
+            self._speaker == "agent"
+            and len(self._turn_agent_text) > self._agent_text_emitted_len
+            and now - self._last_agent_fragment >= AGENT_TEXT_QUIET_S
+            and not self._tool_outputs
+            and self._tool_flush_deadline is None
+        ):
+            self._emit_agent_text()
+
         if not self._hangup_pending:
             return
         if self._hangup_deadline is not None and now >= self._hangup_deadline:
@@ -1259,9 +1296,8 @@ You can use the caller's phone number for SMS or callbacks without asking."""
 
     # -- Structured events --
 
-    def _emit_turn_complete(self) -> None:
+    def _emit_turn_complete(self, *, barge_in: bool) -> None:
         """Emit a structured turn_complete event with per-turn metrics."""
-        barge_in = self._turn_barge_in
         self._logger.bind(
             event="turn_complete",
             call_id=self.parent_call_id,
@@ -1288,6 +1324,8 @@ You can use the caller's phone number for SMS or callbacks without asking."""
             turns=self._turn_count,
             barge_ins=self._barge_in_count,
             errors=self._error_count,
+            # Time to first speech: end of the caller's speech to the start of the reply
+            ttfs_avg_ms=avg_gap,
             response_gap_avg_ms=avg_gap,
             response_gap_samples=len(gaps),
             rx_bytes=self._plivo_rx_bytes,

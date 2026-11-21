@@ -43,6 +43,8 @@ _receive_from_plivo():
   - Decode base64 μ-law from Plivo WebSocket messages
   - Convert to API format via plivo_to_{api}()
   - Run Silero VAD via plivo_to_vad() + self._vad.process()
+    (S2S with no VAD model in its name: skip the VAD steps here; the model owns turn
+    detection, and barge-in only drains the send queue and sends clearAudio)
   - On speech_started + self._is_responding: trigger barge-in
     - Cancel API response (response.cancel or equivalent)
     - Drain send queue

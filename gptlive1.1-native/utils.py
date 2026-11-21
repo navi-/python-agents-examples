@@ -22,7 +22,7 @@ from loguru import logger
 load_dotenv()
 
 # =============================================================================
-# Configuration — only what utils.py functions consume
+# Configuration: only what utils.py functions consume
 # =============================================================================
 
 DEFAULT_COUNTRY_CODE = os.getenv("DEFAULT_COUNTRY_CODE", "US")

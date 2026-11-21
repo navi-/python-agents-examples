@@ -1,5 +1,5 @@
 """
-Live call E2E test — places a real call through Plivo infrastructure.
+Live call E2E test: places a real call through Plivo infrastructure.
 
 This test:
 1. Starts an ngrok tunnel to port 18002, then the inbound server with PUBLIC_URL set

@@ -1,4 +1,4 @@
-# GPT-Live 1.1 Native — Plivo Voice Agent
+# GPT-Live 1.1 Native (Plivo Voice Agent)
 
 Plivo bidirectional audio streaming bridged over raw `websockets` + asyncio (no SDK/framework) to OpenAI GPT-Live `gpt-live-1.1` (`wss://api.openai.com/v1/live/sessions`, `Authorization: Bearer`), a full-duplex speech-to-speech model that listens while it speaks. `session.start` sets one audio format for both directions, `audio/pcmu` at 8000 Hz, so Plivo μ-law 8kHz (base64 JSON, 160B/20ms) goes in as `session.input_audio.append` and comes back as `session.output_audio.delta` with no transcoding or resampling.
 - No client-side VAD and no turn commit: turn-taking, backchannels and interruptions are decided by the model from the continuous caller stream; voice `marin` and model ids are `.env` config passed verbatim.
@@ -8,7 +8,7 @@ Plivo bidirectional audio streaming bridged over raw `websockets` + asyncio (no 
 
 ## Features
 
-- **One model, full duplex**: GPT-Live hears the caller while it is speaking. There is no STT/LLM/TTS chain to orchestrate and no VAD to tune; the model decides when to talk, when to keep going through an "mm-hm", and when to stop.
+- **One model, full duplex**: GPT-Live hears the caller while it is speaking. There is no STT/LLM/TTS chain to orchestrate and no turn detection to tune; the model decides when to talk, when to keep going through an "mm-hm", and when to stop.
 - **μ-law 8kHz end to end**: `audio/pcmu` at 8000 Hz is Plivo's own format, so audio is forwarded as is. No `numpy`, `scipy` or `torch` at runtime.
 - **Tools through delegation**: the voice model hands tool work to a backend model (`OPENAI_DELEGATION_MODEL`), which calls this example's five functions (order status, SMS, callback, transfer, end call).
 - **Inbound and outbound**: inbound calls via `/answer`; outbound calls with Plivo's Make Call API and a per-call `greeting` on the answer URL.
@@ -20,7 +20,7 @@ Plivo bidirectional audio streaming bridged over raw `websockets` + asyncio (no 
 
 **The GPT-Live WebSocket session itself has not been run against the live API yet**: the environment this example was written in could not open outbound WebSockets. It was built from OpenAI's published GPT-Live documentation (read 2026-11-21) and verified offline against `tests/fake_live.py`, a local server that speaks the documented wire protocol. Checked against the real API over HTTPS (2026-11-21): `gpt-live-1.1` and `gpt-6-luna` are available models; `gpt-6-luna` accepts this example's `DELEGATION_INSTRUCTIONS` and five function tools through the Responses API, returns a `function_call` output item (`call_id`, `name`, JSON-string `arguments`) and turns a `function_call_output` into one spoken-style sentence; the text-to-speech helper the e2e test uses for caller audio works.
 
-| Verified offline (155 unit + 7 local integration tests) | To confirm on the first live run |
+| Verified offline (unit + local integration tests) | To confirm on the first live run |
 |---|---|
 | `session.start` shape, handshake, pre-start audio buffering | `gpt-live-1.1` accepts `audio/pcmu` at 8000 on the primary WebSocket (the schema allows it; no docs example uses it) |
 | μ-law pass-through, 160-byte `playAudio` framing | Whether output audio arrives in real time or in bursts (decides how often the barge-in flush fires) |
@@ -120,15 +120,19 @@ To run both servers at once behind fixed URLs, give each process its own `PUBLIC
 ```
 gptlive1.1-native/
 ├── inbound/
+│   ├── __init__.py
 │   ├── agent.py              # GPTLiveVoiceAgent: session.start, 3 asyncio tasks, tools, hangup
 │   ├── server.py             # FastAPI: /answer, /ws, /hangup, /fallback, /hold; --tunnel
 │   └── system_prompt.md      # Inbound prompt (delegation, backchannel, interruption policies)
 ├── outbound/
+│   ├── __init__.py
 │   ├── agent.py              # Same agent; greeting from the answer_url, outbound call context
 │   ├── server.py             # FastAPI: /outbound/answer, /outbound/hangup, /ws; --tunnel
 │   └── system_prompt.md      # Outbound prompt
 ├── utils.py                  # normalize_phone_number, pass-through audio wrappers, quick tunnel
 ├── tests/
+│   ├── __init__.py
+│   ├── conftest.py           # sys.path setup
 │   ├── fake_live.py          # Local stand-in for the GPT-Live WebSocket API
 │   ├── helpers.py            # Signing, servers, tunnels, recordings; test-only μ-law codec
 │   ├── test_integration.py   # Unit + local integration (offline) + direct GPT-Live check
@@ -137,7 +141,10 @@ gptlive1.1-native/
 │   ├── test_multiturn_voice.py  # Real multi-turn call + barge-in
 │   └── test_outbound_call.py # Real outbound call
 ├── pyproject.toml
+├── uv.lock
 ├── .env.example
+├── .gitignore
+├── .pre-commit-config.yaml
 ├── Dockerfile
 └── README.md
 ```
@@ -195,7 +202,9 @@ GPT-Live sends no "user started speaking" event, and it cannot take back audio i
 
 ### Turns in the logs
 
-Transcript deltas are fragments with session-timeline `start_ms`/`end_ms` and no turn markers. The agent cuts turns where the speaker changes: caller fragments, then agent fragments, until the caller speaks again. The greeting is turn 1. `response_gap_ms` is the gap on GPT-Live's own timeline between the end of the caller's speech and the start of the reply.
+Transcript deltas are fragments with session-timeline `start_ms`/`end_ms` and no turn markers. The agent cuts turns where the speaker changes: caller fragments, then agent fragments, until the caller speaks again. The greeting is turn 1. `response_gap_ms` is the gap on GPT-Live's own timeline between the end of the caller's speech and the start of the reply; `session_end` reports its average as `ttfs_avg_ms` (time to first speech).
+
+`user_text` is logged when the agent's reply starts, and `agent_text` once the agent's transcript has been quiet for 1 s (`AGENT_TEXT_QUIET_S`), so both are visible while the turn is still open. `turn_complete` follows when the caller speaks again or the session ends. If the agent resumes within the same turn, the added text is logged as a further `agent_text`; `turn_complete` always carries the full text of both sides.
 
 ### Ending the call
 
@@ -285,7 +294,7 @@ Set `LOG_FORMAT=json` for one JSON object per log line. Structured events:
 | `call_answered` | `call_id`, `leg_call_id`, `from_number`, `to_number`, `sip_headers`, `stream_id` |
 | `user_text` / `agent_text` | `call_id`, `turn`, `text` |
 | `turn_complete` | `turn`, `barge_in`, `user_text`, `agent_text`, `response_gap_ms`, `plivo_rx_bytes`, `plivo_tx_chunks` |
-| `session_end` | `duration_s`, `turns`, `barge_ins`, `errors`, `response_gap_avg_ms`, `rx_bytes`, `tx_chunks`, `openai_session_id`, `openai_close_reason`, `openai_usage` |
+| `session_end` | `duration_s`, `turns`, `barge_ins`, `errors`, `ttfs_avg_ms`, `response_gap_avg_ms`, `rx_bytes`, `tx_chunks`, `openai_session_id`, `openai_close_reason`, `openai_usage` |
 
 Optional sinks: `REDIS_EVENTS_URL` publishes every log record to a Redis Stream (`uv sync --extra streaming`); with `uv sync --extra observability`, OpenTelemetry spans `session`, `plivo_rx`, `openai_rx`, `plivo_tx` and `tool.<name>` are exported to `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
@@ -293,16 +302,16 @@ Optional sinks: `REDIS_EVENTS_URL` publishes every log record to a Redis Stream 
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | — | OpenAI API key (GPT-Live and the delegation model) |
+| `OPENAI_API_KEY` | required | OpenAI API key (GPT-Live and the delegation model) |
 | `OPENAI_LIVE_MODEL` | `gpt-live-1.1` | `session.model`, passed verbatim |
 | `OPENAI_LIVE_VOICE` | `marin` | `session.audio.output.voice`, passed verbatim |
 | `OPENAI_DELEGATION_MODEL` | `gpt-6-luna` | `session.delegation.responses.model`, passed verbatim |
 | `OPENAI_DELEGATION_REASONING_EFFORT` | unset | `delegation.responses.reasoning.effort`; omitted when empty |
 | `OPENAI_LIVE_URL` | `wss://api.openai.com/v1/live/sessions` | Override for a proxy or the test fake |
 | `AGENT_GREETING` | "Hi, this is Alex from TechFlow. I'm built with OpenAI GPT-Live on Plivo. How can I help you today?" | Inbound greeting |
-| `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` | — | Plivo credentials; the token also keys the signature checks (required) |
-| `PLIVO_PHONE_NUMBER` | — | Number to point at this server on startup |
-| `PUBLIC_URL` | — | Public HTTPS URL of this server; not needed with `--tunnel` |
+| `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` | required | Plivo credentials; the token also keys the signature checks (required) |
+| `PLIVO_PHONE_NUMBER` | unset | Number to point at this server on startup |
+| `PUBLIC_URL` | unset | Public HTTPS URL of this server; not needed with `--tunnel` |
 | `DEFAULT_COUNTRY_CODE` | `US` | Region for phone numbers without a country prefix |
 | `SERVER_PORT` / `OUTBOUND_SERVER_PORT` | `8000` / `8001` | Inbound / outbound server ports |
 | `LOG_LEVEL` | `normal` | `verbose`, `normal`, `quiet` |
@@ -358,6 +367,8 @@ The e2e test can keep each simulated call as a stereo 8 kHz WAV, caller on the l
 SAVE_CALL_AUDIO_DIR=samples uv run pytest tests/test_e2e_live.py -v -s
 # samples/e2e-greeting.wav, samples/e2e-conversation.wav, samples/e2e-barge-in.wav
 ```
+
+The tests also read `NGROK_BIN` (ngrok binary, default `ngrok` on `PATH`), `FFMPEG_DIR` (directory with an `ffmpeg` binary to prefer) and `TEST_LOG_DIR` (where test server logs go, default the system temp dir). The servers read none of these.
 
 ## Deployment
 
@@ -427,6 +438,6 @@ The log should show `calling <function>` followed (at `LOG_LEVEL=verbose`) by `r
 
 - GPT-Live expects a continuous input stream paced at its sample rate. Plivo provides exactly that (one 20 ms frame every 20 ms), so frames are forwarded as they arrive, silence included.
 - `audio.format` is a single object for both directions; there is no separate input/output format, and it cannot change mid-session.
-- The session's `expires_at` is logged at `LOG_LEVEL=verbose`; when a session expires GPT-Live sends `session.closed` (`reason: expired`) and the call ends.
+- The session's `expires_at` is logged at `LOG_LEVEL=verbose`; when a session expires GPT-Live sends `session.closed` (`reason: expired`) and the call ends: whenever the agent session finishes, the server hangs up the call over Plivo REST, because `keepCallAlive` would otherwise hold it open.
 - `error` events answer one client event and do not end the session; they are logged and counted in `session_end.errors`.
 - The housekeeping tick in `plivo_tx` is time-based rather than idle-based, because GPT-Live may stream audio without gaps.

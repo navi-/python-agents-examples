@@ -663,12 +663,53 @@ class TestUnitLiveEventHandling:
         assert turns[1]["response_gap_ms"] == 700  # 5900 - 5200 on GPT-Live's timeline
         assert not any(t["barge_in"] for t in turns)
         user_texts = of_event(captured_events, "user_text")
-        assert [(e["turn"], e["text"]) for e in user_texts] == [(2, "What plans do you offer?")]
+        # A caller turn the agent never answered is still shown, when the turn closes
+        assert [(e["turn"], e["text"]) for e in user_texts] == [
+            (2, "What plans do you offer?"),
+            (3, "Thanks."),
+        ]
         agent_texts = of_event(captured_events, "agent_text")
         assert [(e["turn"], e["text"]) for e in agent_texts] == [
             (1, "Hi, this is Alex."),
             (2, "We have three."),
         ]
+
+    async def test_agent_text_shown_when_transcript_goes_quiet(self, captured_events):
+        """agent_text does not wait for turn_complete (the caller's next words)."""
+        agent, _, _ = make_agent()
+        await agent._handle_openai_event(transcript("user", "What plans?", 1000, 1500))
+        await agent._handle_openai_event(transcript("agent", "We have three.", 2000, 2800))
+        from inbound.agent import AGENT_TEXT_QUIET_S
+
+        now = time.monotonic()
+        await agent._housekeeping(now)  # a fragment just arrived: not quiet yet
+        assert of_event(captured_events, "agent_text") == []
+        (user_text,) = of_event(captured_events, "user_text")  # shown as the reply starts
+        assert (user_text["turn"], user_text["text"]) == (1, "What plans?")
+
+        await agent._housekeeping(now + AGENT_TEXT_QUIET_S + 0.1)
+        (shown,) = of_event(captured_events, "agent_text")
+        assert (shown["turn"], shown["text"]) == (1, "We have three.")
+        assert of_event(captured_events, "turn_complete") == []  # the turn is still open
+
+        # The agent resumes in the same turn: only the new text is shown, nothing twice
+        await agent._handle_openai_event(transcript("agent", " Want details?", 4000, 4600))
+        agent._finish_turn()
+        texts = [e["text"] for e in of_event(captured_events, "agent_text")]
+        assert texts == ["We have three.", "Want details?"]
+        (turn,) = of_event(captured_events, "turn_complete")
+        assert turn["agent_text"] == "We have three. Want details?"
+        assert len(of_event(captured_events, "user_text")) == 1
+
+    async def test_text_events_are_single_log_lines(self, captured_events):
+        """user_text / agent_text ride on the console line: one record each, not two."""
+        agent, _, _ = make_agent()
+        await agent._handle_openai_event(transcript("user", "Hello?"))
+        await agent._handle_openai_event(transcript("agent", "Hi there."))
+        agent._finish_turn()
+        for name, stage in (("user_text", "turn"), ("agent_text", "llm")):
+            (evt,) = of_event(captured_events, name)
+            assert evt["stage"] == stage and "elapsed_s" in evt
 
     async def test_caller_speaking_first_is_turn_one(self, captured_events):
         agent, _, _ = make_agent(initial_message="")
@@ -832,6 +873,7 @@ class TestUnitLiveEventHandling:
         assert end["openai_session_id"] == "live_fake_123"
         assert end["openai_close_reason"] == "close_requested"
         assert end["turns"] == 1 and end["errors"] == 0
+        assert {"barge_ins", "duration_s", "ttfs_avg_ms"} <= set(end)
         (turn,) = of_event(captured_events, "turn_complete")
         assert turn["agent_text"] == "Hi."
 
@@ -1369,6 +1411,12 @@ class TestUnitWebhookAuth:
         server = _server(module, monkeypatch)
         recorder = _RunAgentRecorder()
         monkeypatch.setattr(server, "run_agent", recorder)
+        hung_up: list[str] = []
+
+        async def fake_hangup(call_uuid: str) -> None:
+            hung_up.append(call_uuid)
+
+        monkeypatch.setattr(server, "_hangup_call", fake_hangup)
         client = TestClient(server.app)
         path = _answer_path(module)
         answer = client.post(path, data=FORM, headers=signed("POST", PUBLIC, path, FORM))
@@ -1376,6 +1424,8 @@ class TestUnitWebhookAuth:
             ws.send_text(json.dumps({"event": "start", "start": {"callId": "c-1"}}))
         assert len(recorder.calls) == 1
         assert recorder.calls[0]["from_number"] == FORM["From"]
+        # keepCallAlive holds the call after the stream: the server ends it when the agent does
+        assert hung_up == ["c-1"]
 
     @pytest.mark.parametrize("module", SERVER_MODULES)
     def test_ws_rejects_unsigned_and_wrongly_signed(self, monkeypatch, captured_messages, module):

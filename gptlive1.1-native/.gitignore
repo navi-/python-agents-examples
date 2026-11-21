@@ -55,3 +55,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Voice samples saved by the e2e test (SAVE_CALL_AUDIO_DIR=samples)
+samples/

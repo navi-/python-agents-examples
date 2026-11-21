@@ -288,7 +288,7 @@ class TestE2ELive:
         assert len(greeting) > 8000, f"Greeting too short: {len(greeting)} bytes"
         rms = rms_of_ulaw(greeting)
         print(f"\n[Greeting] {len(greeting)} bytes ({len(greeting) / 8000:.1f}s), RMS {rms:.0f}")
-        assert rms > 300, f"Audio RMS {rms:.1f} too low — likely silence"
+        assert rms > 300, f"Audio RMS {rms:.1f} too low: likely silence"
 
         transcript = transcribe_ulaw(greeting)
         print(f"[Greeting transcript]: {transcript}")

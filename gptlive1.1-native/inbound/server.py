@@ -76,7 +76,7 @@ if _LOG_FILE:
     )
 
 # ---------------------------------------------------------------------------
-# Redis Streams sink (optional — publishes structured events for real-time UIs)
+# Redis Streams sink (optional: publishes structured events for real-time UIs)
 # ---------------------------------------------------------------------------
 _REDIS_EVENTS_URL = os.getenv("REDIS_EVENTS_URL", "")
 _REDIS_STREAM_KEY = os.getenv("REDIS_STREAM_KEY", "voice-agent:events")
@@ -101,14 +101,14 @@ if _REDIS_EVENTS_URL:
                 _redis_client.xadd(_REDIS_STREAM_KEY, fields, maxlen=10000, approximate=True)
 
         logger.add(_redis_sink, level="DEBUG")
-        logger.info("Redis Streams sink enabled — publishing to {}", _REDIS_STREAM_KEY)
+        logger.info("Redis Streams sink enabled: publishing to {}", _REDIS_STREAM_KEY)
     except ImportError:
         logger.warning("REDIS_EVENTS_URL set but 'redis' package not installed")
     except Exception as _redis_err:
         logger.warning("Redis Streams sink failed to connect: {}", _redis_err)
 
 # ---------------------------------------------------------------------------
-# OTel tracing setup (optional — install with `uv sync --extra observability`)
+# OTel tracing setup (optional: install with `uv sync --extra observability`)
 # ---------------------------------------------------------------------------
 try:
     from opentelemetry import trace
@@ -120,7 +120,7 @@ try:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-        logger.info("OTel tracing enabled — exporting to OTLP endpoint")
+        logger.info("OTel tracing enabled: exporting to OTLP endpoint")
     trace.set_tracer_provider(provider)
 except ImportError:
     pass
@@ -600,6 +600,11 @@ async def websocket_endpoint(
     except Exception as e:
         logger.bind(call_id=call_id).error(f"WebSocket error: {e}")
     finally:
+        # keepCallAlive holds the call open after the stream ends, so end it here.
+        # Hanging up a call that has already ended is a no-op at Plivo.
+        if call_id != "unknown":
+            with contextlib.suppress(Exception):
+                await _hangup_call(call_id)
         with contextlib.suppress(Exception):
             await websocket.close()
 

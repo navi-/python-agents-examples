@@ -71,7 +71,7 @@ See the "Managed Voice-Agent Platforms" section of [CLAUDE.md](./CLAUDE.md) for 
 | Project Name | LLM | STT | TTS | Framework |
 |---|---|---|---|---|
 | `gpt5.4-assemblyaiu3-cartesiasonic3-native` | GPT 5.4 | AssemblyAI U3 | Cartesia Sonic 3 | None |
-| `gemini2.5-live-native` | Gemini 2.5 (S2S) | Gemini 2.5 (S2S) | Gemini 2.5 (S2S) | None |
+| `gptlive1.1-native` | GPT-Live 1.1 (S2S) | GPT-Live 1.1 (S2S) | GPT-Live 1.1 (S2S) | None |
 | `gpt4.1-deepgramnova3-elevenflashv2.5-vapi` | GPT 4.1 | Deepgram Nova 3 | ElevenLabs Flash v2.5 | Vapi |
 | `deepgram-voiceagent` | Configurable (default GPT-4.1 mini, hosted by Deepgram) | Configurable (default Deepgram Flux) | Configurable (default Deepgram Aura-2) | Managed platform (Deepgram Voice Agent API) |
 

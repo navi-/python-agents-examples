@@ -614,7 +614,7 @@ if [[ "$ORCHESTRATION" == "managed-platform" ]]; then
     else
         fail "clearAudio not sent in inbound/agent.py (platform barge-in must flush Plivo playback)"
     fi
-elif $S2S && [[ -z "$NAMED_VAD" ]]; then
+elif $S2S && [[ "$ORCHESTRATION" == "native" ]] && [[ -z "$NAMED_VAD" ]]; then
     # S2S with no VAD model in its name: the model owns turn detection, so no client-side
     # VAD may be present. One that is present must be named (-silerovad / -webrtcvad).
     vad_code=$(grep -lE "SileroVADProcessor|plivo_to_vad|webrtcvad|silero" \

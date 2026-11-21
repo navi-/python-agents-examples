@@ -51,7 +51,9 @@ Run through EVERY item. Report PASS or FAIL with details for each.
 16. **Sample rates correct**: Check `plivo_to_{api}()` and `{api}_to_plivo()` use correct rates (native and managed platform; documented pass-throughs when the API is μ-law 8kHz end to end, reference `deepgram-voiceagent/utils.py`). Framework or hosted: skip unless the example's own code converts audio, then check the helpers it calls
 16b. **utils.py helpers match who converts audio** (CLAUDE.md "utils.py Requirements" table): native has the codec set, both direction wrappers and (when it runs Silero VAD: cascaded native, or S2S `-silerovad`) `plivo_to_vad` + `SileroVADProcessor`; a framework example whose serializer/transport converts, or a hosted one whose audio never reaches this server, has only `normalize_phone_number` and no unused helpers or `numpy`/`scipy` deps for them; no example imports `audioop`, calls a resampler or defines its own μ-law/resample function in `agent.py` / `server.py`
 
-#### VAD (4 checks — native only, skip for framework)
+#### VAD (4 checks — native that runs Silero VAD: cascaded, or S2S `-silerovad`; skip for framework)
+
+S2S with no VAD model in its name (CLAUDE.md "S2S examples and VAD naming"): replace 17-20 with two checks. (a) No client-side VAD code or dependency (`SileroVADProcessor`, `plivo_to_vad`, `silero-vad`, `webrtcvad`) in `utils.py`, either `agent.py` or `pyproject.toml`. (b) Barge-in drains the send queue and sends `clearAudio` to Plivo.
 
 17. **SileroVADProcessor used**: Imported and instantiated in agent.__init__
 18. **plivo_to_vad exists**: In utils.py, converts to float32 16kHz

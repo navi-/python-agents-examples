@@ -150,7 +150,7 @@ def start_server(
     for key, value in (env_overrides or {}).items():
         env[key] = value
 
-    log_file = open(log_path, "w")  # noqa: SIM115 — closed by stop_server
+    log_file = open(log_path, "w")  # noqa: SIM115: closed by stop_server
     proc = subprocess.Popen(
         [sys.executable, "-m", module],
         cwd=str(PROJECT_DIR),
@@ -215,7 +215,7 @@ def log_messages(log_path: Path) -> list[str]:
 
 
 # =============================================================================
-# Plivo webhook and /ws stream signing (V3), /ws stream URLs — what Plivo itself sends
+# Plivo webhook and /ws stream signing (V3), /ws stream URLs: what Plivo itself sends
 # =============================================================================
 
 
