@@ -1,4 +1,4 @@
-# GPT-Live 1.1 Native (no client VAD) — Plivo Voice Agent
+# GPT-Live 1.1 Native — Plivo Voice Agent
 
 Plivo bidirectional audio streaming bridged over raw `websockets` + asyncio (no SDK/framework) to OpenAI GPT-Live `gpt-live-1.1` (`wss://api.openai.com/v1/live/sessions`, `Authorization: Bearer`), a full-duplex speech-to-speech model that listens while it speaks. `session.start` sets one audio format for both directions, `audio/pcmu` at 8000 Hz, so Plivo μ-law 8kHz (base64 JSON, 160B/20ms) goes in as `session.input_audio.append` and comes back as `session.output_audio.delta` with no transcoding or resampling.
 - No client-side VAD and no turn commit: turn-taking, backchannels and interruptions are decided by the model from the continuous caller stream; voice `marin` and model ids are `.env` config passed verbatim.
@@ -59,7 +59,7 @@ Caller ──► Plivo ══ WebSocket ══► this server (bridge) ══ We
 For both options, first put four values in `.env`:
 
 ```bash
-git clone https://github.com/plivo/python-agents-examples && cd python-agents-examples/gptlive1.1-native-no-vad
+git clone https://github.com/plivo/python-agents-examples && cd python-agents-examples/gptlive1.1-native
 cp .env.example .env   # set OPENAI_API_KEY, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_PHONE_NUMBER
 ```
 
@@ -95,14 +95,14 @@ curl -X POST "https://api.plivo.com/v1/Account/$PLIVO_AUTH_ID/Call/" \
 ### Option B: Docker
 
 ```bash
-docker build -t gptlive1.1-native-no-vad .
-docker run --env-file .env -e PUBLIC_URL=https://your-host.example.com -p 8000:8000 gptlive1.1-native-no-vad
+docker build -t gptlive1.1-native .
+docker run --env-file .env -e PUBLIC_URL=https://your-host.example.com -p 8000:8000 gptlive1.1-native
 ```
 
 The container listens on port 8000 and configures the Plivo number from `PUBLIC_URL` on startup. For outbound calls, append `uv run python -m outbound.server` to `docker run` and publish port 8001 instead:
 
 ```bash
-docker run --env-file .env -e PUBLIC_URL=https://your-outbound-host.example.com -p 8001:8001 gptlive1.1-native-no-vad \
+docker run --env-file .env -e PUBLIC_URL=https://your-outbound-host.example.com -p 8001:8001 gptlive1.1-native \
   uv run python -m outbound.server
 ```
 
@@ -118,7 +118,7 @@ To run both servers at once behind fixed URLs, give each process its own `PUBLIC
 ## Project Structure
 
 ```
-gptlive1.1-native-no-vad/
+gptlive1.1-native/
 ├── inbound/
 │   ├── agent.py              # GPTLiveVoiceAgent: session.start, 3 asyncio tasks, tools, hangup
 │   ├── server.py             # FastAPI: /answer, /ws, /hangup, /fallback, /hold; --tunnel
@@ -317,7 +317,7 @@ Timing constants (`BARGE_IN_FLUSH_BACKLOG_MS`, `END_CALL_QUIET_S`, `END_CALL_GRA
 The prompt is `inbound/system_prompt.md` / `outbound/system_prompt.md`; there is no env override. Edit the file, or mount your own over it:
 
 ```bash
-docker run --env-file .env -v ./my_prompt.md:/app/inbound/system_prompt.md -p 8000:8000 gptlive1.1-native-no-vad
+docker run --env-file .env -v ./my_prompt.md:/app/inbound/system_prompt.md -p 8000:8000 gptlive1.1-native
 ```
 
 GPT-Live instructions should stay short and say when to delegate. Keep the "Delegation Policy", "Backchannel Policy" and "Interruption Policy" sections when you rewrite the prompt: they are how turn-taking and tool use are steered. Backend procedures belong in `DELEGATION_INSTRUCTIONS` in `agent.py`.
@@ -370,13 +370,13 @@ Use any host that runs containers and keeps WebSocket connections open for the l
 | Vercel/Netlify functions, AWS Lambda | ❌ | No long-lived WebSocket server |
 
 ```bash
-docker build -t gptlive1.1-native-no-vad .
+docker build -t gptlive1.1-native .
 
 # Inbound (default): configures the Plivo number from PUBLIC_URL on startup
-docker run -p 8000:8000 --env-file .env -e PUBLIC_URL=https://your-host.example.com gptlive1.1-native-no-vad
+docker run -p 8000:8000 --env-file .env -e PUBLIC_URL=https://your-host.example.com gptlive1.1-native
 
 # Outbound (listens on 8001, OUTBOUND_SERVER_PORT)
-docker run -p 8001:8001 --env-file .env -e PUBLIC_URL=https://your-host.example.com gptlive1.1-native-no-vad \
+docker run -p 8001:8001 --env-file .env -e PUBLIC_URL=https://your-host.example.com gptlive1.1-native \
   uv run python -m outbound.server
 ```
 

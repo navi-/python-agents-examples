@@ -154,7 +154,7 @@ TOOL_TIMEOUT_S = 10.0
 # μ-law bytes whose segment (exponent) is 0 or 1: amplitude below ~1% of full scale.
 # A chunk made only of these is silence or line noise, not agent speech.
 QUIET_MULAW_BYTES = bytes(b for b in range(256) if b & 0x70 >= 0x60)
-EXAMPLE_NAME = "gptlive1.1-native-no-vad"
+EXAMPLE_NAME = "gptlive1.1-native"
 
 # Logging verbosity: "verbose", "normal" (default), "quiet"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "normal").lower()

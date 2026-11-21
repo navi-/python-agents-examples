@@ -44,6 +44,16 @@ Drop the size class (mini/nano/pro/flash) unless two different sizes are used to
 | `livekit` | Uses the LiveKit Agents framework |
 | `vapi` | Uses the Vapi framework |
 
+### S2S examples and VAD naming
+
+A speech-to-speech model detects turns itself, so "no VAD" is never part of an S2S example's name or title.
+
+- `{s2s-model}-{orchestration}` (e.g. `gptlive1.1-native`) means the model's own turn detection and no client-side VAD.
+- If the example runs a client-side VAD, the name ends with that VAD's model: `-silerovad` or `-webrtcvad`.
+- Do not use `-no-vad`. Add `[tool.voice-agent-example]` `category = "s2s"` to `pyproject.toml`; the validator enforces both rules.
+
+Existing S2S examples that predate this (`gemini2.5-live-native-no-vad`, and the Silero-based `gemini2.5-live-native`, `gemini3.1-live-native`, `gptrealtime1.5-native`, `grok3-voice-native`) keep their names for now.
+
 ### Managed voice-agent platforms: `{provider}-{product}[-{variant}]`
 
 When a hosted product runs the whole STT → LLM → TTS loop (including turn detection and barge-in), name the example after that product instead of its component models — e.g. `deepgram-voiceagent` for Deepgram's "Voice Agent API".

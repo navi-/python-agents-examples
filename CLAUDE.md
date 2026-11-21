@@ -52,14 +52,31 @@ Drop the size class (mini/nano/pro/flash) — it's `.env` config. Only include s
 `gpt5.4-assemblyaiu3-cartesiasonic3-native`, `gemini2.5-live-pipecat`, `gpt4.1-deepgramnova3-elevenflashv2.5-native`, `deepgram-voiceagent` (managed platform — see below)
 
 Orchestration types:
-- **native** — raw websockets/SDK, custom asyncio task management, client-side Silero VAD (default)
+- **native** — raw websockets/SDK, custom asyncio task management. Cascaded (STT → LLM → TTS) native examples run client-side Silero VAD by default; for S2S examples see "S2S examples and VAD naming"
 - **pipecat** / **livekit** / **vapi** — framework-based Pipeline, framework-managed VAD
 - **managed platform** — hosted voice-agent product; no orchestration token in the name (see "Managed Voice-Agent Platforms")
 
-Variants:
-- **`-no-vad`** — explicitly opts out of client-side VAD (e.g., `gemini2.5-live-native-no-vad` relies on server-side VAD)
-- **`-webrtcvad`** — uses WebRTC VAD instead of Silero (e.g., `gemini2.5-live-native-webrtcvad`)
-- All new native examples include Silero VAD by default. These suffixes are the exception, not the rule.
+Variants name the client-side VAD model an example runs:
+- **`-silerovad`** — Silero VAD (`SileroVADProcessor`) in this example's own code
+- **`-webrtcvad`** — WebRTC VAD (`webrtcvad.Vad`) in this example's own code (e.g., `gemini2.5-live-native-webrtcvad`)
+- A variant token always names a VAD **model**. Never write `-no-vad` (or any other "no VAD" wording) in a name.
+
+### S2S examples and VAD naming
+
+A speech-to-speech model (`gpt-live-*`, `gpt-realtime-*`, Gemini Live, Grok Voice, …) detects turns and interruptions itself. "No VAD" is therefore not a property of an S2S example, and the term is not used for one: not in the directory name, the README title or headings, package names, or comments. Describe what is true instead: the model owns turn-taking.
+
+- **Bare name = the model's own turn detection.** `{s2s-model}-{orchestration}` (e.g. `gptlive1.1-native`) means this example runs no client-side VAD.
+- **A client-side VAD is always named by its model.** If the example runs one next to the S2S model (for barge-in or turn commit), the name ends with that VAD model: `{s2s-model}-{orchestration}-silerovad` or `-webrtcvad`. A new VAD model gets its own token, `{vendor}{model}vad` style, lowercase, no separators.
+- **The README names it too.** The demo description (text between H1 and first H2) states the VAD model, frame size and thresholds when one is used, or that turn-taking is the model's when none is.
+- **Declare the category** in `pyproject.toml` so `scripts/validate-example.sh` applies these rules:
+  ```toml
+  [tool.voice-agent-example]
+  category = "s2s"
+  ```
+  The validator then fails a name containing `-no-vad`, fails client-side VAD code (`SileroVADProcessor`, `plivo_to_vad`, `webrtcvad`, a `silero-vad` dependency) in an example whose name has no VAD token, and applies the Silero or WebRTC checks to one that has.
+- The client must still flush Plivo playback (`clearAudio`) on barge-in, with or without a client-side VAD.
+
+Legacy names, not models for new work, to be revisited separately: `gemini2.5-live-native-no-vad` (would be `gemini2.5-live-native`), and `gemini2.5-live-native`, `gemini3.1-live-native`, `gptrealtime1.5-native`, `grok3-voice-native`, which run Silero VAD without naming it (would end in `-silerovad`). None of them declares `category = "s2s"`, so the validator keeps treating them as before.
 
 ### Managed Voice-Agent Platforms
 
@@ -70,7 +87,7 @@ A managed platform runs the whole conversation loop (STT, LLM, TTS, turn detecti
 - **`{provider}`** — the company name, lowercased.
 - **`{product}`** — the platform's *own* name for the product, as branded in its docs/API reference: lowercased, spaces and punctuation removed, generic suffixes like "API" dropped. Honor each brand's naming; do **not** reuse another platform's product term or invent a shared category word. If the product name is the company name, write it once. If a provider has several voice-agent products, use the one whose API the example actually calls.
 - **No model components** — model choices are `.env` config. Env vars mirror the platform's own config schema and accept its documented values verbatim (model ids, provider types); never define aliases or wrapper values on top. The README lists tested combinations.
-- **No `native`/`-no-vad`/orchestration token** — turn detection and barge-in are owned by the platform. The client still must flush Plivo playback (`clearAudio`) on the platform's interruption event.
+- **No `native`/orchestration/VAD token** — turn detection and barge-in are owned by the platform. The client still must flush Plivo playback (`clearAudio`) on the platform's interruption event.
 - **One example per platform.** A different model combination is a README/`.env` change, not a new example.
 - Declare the category in `pyproject.toml` so `scripts/validate-example.sh` applies the right checks:
   ```toml
@@ -157,10 +174,10 @@ Audio helpers, by name:
 
 | Who converts audio on the call path | Required in `utils.py` besides `normalize_phone_number` | Reference |
 |---|---|---|
-| **Native**, API needs PCM or another rate | Codec set, both wrappers, Silero set | `grok3-voice-native/` |
-| **Native `-no-vad`** | Codec set, both wrappers. No VAD code | `gemini2.5-live-native-no-vad/` |
+| **Native** with Silero VAD (cascaded default, or S2S `-silerovad`), API needs PCM or another rate | Codec set, both wrappers, Silero set | `grok3-voice-native/` |
+| **Native S2S, no client-side VAD**, API needs PCM or another rate | Codec set, both wrappers. No VAD code | `gemini2.5-live-native-no-vad/` (legacy name) |
 | **Native `-webrtcvad`** | Codec set, both wrappers. No Silero set: the `webrtcvad.Vad` instance lives in `agent.py` and is fed `ulaw_to_pcm` output at 8kHz | `gemini2.5-live-native-webrtcvad/` |
-| **Native or managed platform, μ-law 8kHz end to end** (API accepts and emits Plivo's own format, no client-side VAD) | Both wrappers as documented pass-throughs (the body returns its argument). Codec set, decode table and sample-rate constants omitted | `deepgram-voiceagent/` (Deepgram Voice Agent configured for `mulaw` 8000 in and out), `gptlive1.1-native-no-vad/` (GPT-Live `audio/pcmu` 8000) |
+| **Native or managed platform, μ-law 8kHz end to end** (API accepts and emits Plivo's own format, no client-side VAD) | Both wrappers as documented pass-throughs (the body returns its argument). Codec set, decode table and sample-rate constants omitted | `deepgram-voiceagent/` (Deepgram Voice Agent configured for `mulaw` 8000 in and out), `gptlive1.1-native/` (GPT-Live `audio/pcmu` 8000) |
 | **Managed platform** configured for PCM or another rate | Codec set, both wrappers. No VAD code | none yet |
 | **Framework** (pipecat / livekit), serializer or transport converts | Nothing | `gpt4o-modulatevelma2-cartesiasonic3-pipecat/` (`PlivoFrameSerializer`) |
 | **Framework** whose own code touches raw audio (a custom processor or service that decodes, encodes or resamples) | The helpers that code calls, defined in `utils.py` and imported from there | none yet |
@@ -177,7 +194,9 @@ Rules that follow from the principle:
 
 ## VAD Strategy
 
-**Native examples**: client-side Silero VAD (`SileroVADProcessor`).
+**S2S examples**: the model detects turns; no client-side VAD unless the example needs one, and then its model is in the directory name (`-silerovad` / `-webrtcvad`, see "S2S examples and VAD naming"). With none, audio is streamed continuously, nothing is committed, and barge-in only flushes playback (`clearAudio`). Reference: `gptlive1.1-native/inbound/agent.py`.
+
+**Cascaded native examples** (and S2S `-silerovad`): client-side Silero VAD (`SileroVADProcessor`).
 - VAD runs in `plivo_rx` task alongside audio forwarding
 - Speech start during AI response triggers barge-in (`response.cancel` or equivalent)
 - Speech end triggers turn commit (`input_audio_buffer.commit` + `response.create` or equivalent)
@@ -330,7 +349,8 @@ Run: `uv run pytest tests/test_integration.py -v -k "unit"` (offline)
 - `grok3-voice-native/inbound/agent.py` — native agent pattern with VAD + barge-in
 - `grok3-voice-native/outbound/agent.py` — legacy `CallManager` outbound pattern; do not copy it into new examples (see "Outbound Calls")
 - `grok3-voice-native/tests/` — full test suite to replicate
-- `gemini2.5-live-native-no-vad/` — alternative native pattern (SDK-based, server-side VAD, no client-side VAD)
+- `gemini2.5-live-native-no-vad/` — alternative native pattern (SDK-based, the model's own turn detection). Legacy name: do not copy the `-no-vad` token
+- `gptlive1.1-native/` — S2S reference with no client-side VAD (raw WebSocket, μ-law 8kHz end to end, `category = "s2s"`)
 - `gpt4o-modulatevelma2-cartesiasonic3-pipecat/inbound/agent.py`: framework reference for Pipecat 1.x (`PipelineWorker` + `WorkerRunner`, `vad_analyzer` on the user aggregator, `PlivoFrameSerializer`, no audio helpers in `utils.py`)
 - `gemini2.5-live-pipecat/inbound/agent.py`: legacy framework reference (Pipecat 0.0.x: `PipelineTask` + `PipelineRunner`, `vad_enabled=True`)
 - `deepgram-voiceagent/` — managed voice-agent platform reference (raw WebSocket bridge, platform-side turn detection, checkpoint-based playback tracking)

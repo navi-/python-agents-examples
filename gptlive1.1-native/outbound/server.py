@@ -1,4 +1,10 @@
-"""Standalone FastAPI server for inbound calls."""
+"""Standalone FastAPI server for outbound calls.
+
+Calls are placed with Plivo's Make Call API directly (see the Ready line logged at
+startup and the README). This server only answers Plivo's webhooks and bridges audio:
+/outbound/answer reads the optional greeting from its query string (greeting) and
+returns <Stream> XML; /ws runs the agent.
+"""
 
 from __future__ import annotations
 
@@ -11,11 +17,9 @@ import functools
 import json
 import os
 import sys
-import threading
-import time
 from collections.abc import AsyncIterator
 from typing import NoReturn
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import plivo
 import uvicorn
@@ -36,7 +40,7 @@ from loguru import logger
 from plivo import plivoxml
 from plivo.utils import validate_v3_signature
 
-from inbound.agent import (
+from outbound.agent import (
     OPENAI_API_KEY,
     OPENAI_DELEGATION_MODEL,
     OPENAI_LIVE_MODEL,
@@ -129,13 +133,14 @@ try:
     from traceloop.sdk import Traceloop
 
     # Optional export destination only: the models run inside GPT-Live, so it adds no LLM spans.
-    Traceloop.init(app_name="gptlive1.1-native-no-vad")
+    Traceloop.init(app_name="gptlive1.1-native")
     logger.info("OpenLLMetry (Traceloop) auto-instrumentation enabled")
 except ImportError:
     pass
 
-# Server configuration
-SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
+# Server configuration. Own port (not SERVER_PORT) so inbound and outbound can run side by
+# side, each with its own --tunnel.
+SERVER_PORT = int(os.getenv("OUTBOUND_SERVER_PORT", "8001"))
 PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
 PLIVO_PHONE_NUMBER = os.getenv("PLIVO_PHONE_NUMBER", "")
@@ -143,49 +148,19 @@ PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 
 # Webhook authentication: README "Webhook authentication". Always on.
 
-# --tunnel: Plivo rejects answer URLs whose hostname it can't resolve yet ("Must be a
-# valid url"); a fresh trycloudflare.com hostname took ~70s to be accepted in testing.
-TUNNEL_URL_ACCEPT_TIMEOUT_S = 180.0
-TUNNEL_URL_RETRY_INTERVAL_S = 5.0
 _tunnel_proc = None  # cloudflared process started by --tunnel
 
-# Startup "Ready!" line: needs the server accepting connections AND the Plivo number set up
+# Optional answer_url query param: the greeting GPT-Live is told to read exactly when the
+# callee answers. Passed through as is; DEFAULT_OUTBOUND_GREETING when absent.
+GREETING_PARAM = "greeting"
+
+# Startup "Ready!" line: logged once uvicorn accepts connections
 READY_PROBE_TIMEOUT_S = 30.0
 READY_PROBE_INTERVAL_S = 0.1
-
-
-class ReadyLine:
-    """Logs ``Ready! Call +N ...`` exactly once, when both conditions hold.
-
-    The two conditions arrive in either order and from different threads: ``serving()``
-    from the lifespan probe on the event loop, ``plivo_configured()`` from main() (fixed
-    PUBLIC_URL) or the --tunnel background thread. Neither is called if its step fails,
-    so a failed or skipped Plivo setup logs no Ready line.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._serving = False
-        self._phone = ""
-        self._logged = False
-
-    def serving(self) -> None:
-        with self._lock:
-            self._serving = True
-            self._log_if_ready()
-
-    def plivo_configured(self, phone: str) -> None:
-        with self._lock:
-            self._phone = phone
-            self._log_if_ready()
-
-    def _log_if_ready(self) -> None:
-        if self._serving and self._phone and not self._logged:
-            self._logged = True
-            logger.info(f"Ready! Call +{self._phone} to talk to the agent (Ctrl+C to stop)")
-
-
-_ready = ReadyLine()
+READY_EXAMPLE_GREETING = (
+    "Hi, this is Alex from TechFlow. I'm reaching out because you requested a demo. "
+    "Is now a good time for a quick chat?"
+)
 
 
 async def _wait_until_serving(port: int, timeout_s: float = READY_PROBE_TIMEOUT_S) -> bool:
@@ -210,17 +185,48 @@ async def _wait_until_serving(port: int, timeout_s: float = READY_PROBE_TIMEOUT_
         return True
 
 
-async def _mark_serving_when_up() -> None:
+def ready_message(tunnel: bool = False) -> str:
+    """How to place a call with Plivo's Make Call API against this server's answer URL.
+
+    Credentials appear only as $PLIVO_AUTH_ID / $PLIVO_AUTH_TOKEN shell references.
+    """
+    base = PUBLIC_URL.rstrip("/") or "<PUBLIC_URL>"
+    phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
+    from_number = f"+{phone}" if phone else "<your Plivo number>"
+    query = urlencode({GREETING_PARAM: READY_EXAMPLE_GREETING}, quote_via=quote)
+    lines = [
+        "Ready! Place a call with Plivo's Make Call API; Plivo then requests this server's "
+        "answer URL:",
+        '  curl -X POST "https://api.plivo.com/v1/Account/$PLIVO_AUTH_ID/Call/" \\',
+        '    -u "$PLIVO_AUTH_ID:$PLIVO_AUTH_TOKEN" -H "Content-Type: application/json" \\',
+        f'    -d \'{{"from": "{from_number}", "to": "<E.164 number to call>",',
+        f'         "answer_url": "{base}/outbound/answer?{query}",',
+        f'         "hangup_url": "{base}/outbound/hangup",',
+        '         "answer_method": "POST", "hangup_method": "POST"}\'',
+        f"  Optional answer_url query param (URL-encoded): {GREETING_PARAM} — spoken "
+        "when the callee answers (the model is told to read it exactly); a default is used "
+        "when absent.",
+    ]
+    if tunnel:
+        lines.append(
+            "  A new tunnel hostname can take a minute before Plivo accepts it; "
+            'retry if the API answers "Must be a valid url".'
+        )
+    lines.append("(Ctrl+C to stop)")
+    return "\n".join(lines)
+
+
+async def _log_ready_when_serving() -> None:
     if await _wait_until_serving(SERVER_PORT, READY_PROBE_TIMEOUT_S):
-        _ready.serving()
+        logger.info(ready_message(tunnel=_tunnel_proc is not None))
     else:
         logger.warning(f"Server did not accept connections on port {SERVER_PORT}; no Ready line")
 
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Probe for "Ready!"; stop the --tunnel process on shutdown (Ctrl+C and SIGTERM alike)."""
-    ready_task = asyncio.create_task(_mark_serving_when_up())
+    """Log "Ready!" once serving; stop the --tunnel process on shutdown (Ctrl+C / SIGTERM)."""
+    ready_task = asyncio.create_task(_log_ready_when_serving())
     try:
         yield
     finally:
@@ -232,8 +238,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     lifespan=_lifespan,
-    title="OpenAI GPT-Live + Plivo (Inbound)",
-    description=("Inbound voice agent: OpenAI GPT-Live (full-duplex speech-to-speech) + Plivo"),
+    title="OpenAI GPT-Live + Plivo (Outbound)",
+    description=("Outbound voice agent: OpenAI GPT-Live (full-duplex speech-to-speech) + Plivo"),
     version="0.1.0",
 )
 
@@ -344,98 +350,6 @@ async def _hangup_call(call_uuid: str) -> None:
 
 
 # =============================================================================
-# Plivo Webhook Configuration
-# =============================================================================
-
-
-def _is_invalid_url_error(e: Exception) -> bool:
-    """Plivo's API rejects answer/hangup URLs whose hostname it can't resolve yet."""
-    return isinstance(e, plivo.exceptions.ValidationError) and "valid url" in str(e).lower()
-
-
-def configure_plivo_webhooks(wait_for_url_s: float = 0.0) -> bool:
-    """Point PLIVO_PHONE_NUMBER at this server's /answer and /hangup.
-
-    With ``wait_for_url_s`` > 0 (used by --tunnel), keep retrying while Plivo rejects a
-    PUBLIC_URL it can't resolve yet, instead of failing on the first attempt.
-    """
-    if not all([PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_PHONE_NUMBER, PUBLIC_URL]):
-        missing = []
-        if not PLIVO_AUTH_ID:
-            missing.append("PLIVO_AUTH_ID")
-        if not PLIVO_AUTH_TOKEN:
-            missing.append("PLIVO_AUTH_TOKEN")
-        if not PLIVO_PHONE_NUMBER:
-            missing.append("PLIVO_PHONE_NUMBER")
-        if not PUBLIC_URL:
-            missing.append("PUBLIC_URL")
-        logger.warning(f"Skipping Plivo auto-config. Missing: {', '.join(missing)}")
-        return False
-
-    phone_number = normalize_phone_number(PLIVO_PHONE_NUMBER)
-    if not phone_number:
-        logger.error(f"Invalid phone number format: {PLIVO_PHONE_NUMBER}")
-        return False
-
-    client = plivo.RestClient(auth_id=PLIVO_AUTH_ID, auth_token=PLIVO_AUTH_TOKEN)
-    app_name = "GPT_Live_Native"
-    answer_url = f"{PUBLIC_URL}/answer"
-    hangup_url = f"{PUBLIC_URL}/hangup"
-    deadline = time.monotonic() + wait_for_url_s
-    waiting_logged = False
-
-    while True:
-        try:
-            # app_name filters by prefix server-side, so pick the exact match
-            apps = client.applications.list(app_name=app_name)
-            existing_app = next((a for a in apps["objects"] if a["app_name"] == app_name), None)
-            if existing_app:
-                client.applications.update(
-                    app_id=existing_app["app_id"],
-                    answer_url=answer_url,
-                    answer_method="POST",
-                    hangup_url=hangup_url,
-                    hangup_method="POST",
-                )
-                app_id = existing_app["app_id"]
-                logger.info(f"Updated Plivo application: {app_name}")
-            else:
-                response = client.applications.create(
-                    app_name=app_name,
-                    answer_url=answer_url,
-                    answer_method="POST",
-                    hangup_url=hangup_url,
-                    hangup_method="POST",
-                )
-                app_id = response["app_id"]
-                logger.info(f"Created Plivo application: {app_name}")
-
-            client.numbers.update(number=phone_number, app_id=app_id)
-
-            logger.info(f"Plivo webhooks configured for +{phone_number}")
-            logger.info(f"  Answer URL: {answer_url}")
-            logger.info(f"  Hangup URL: {hangup_url}")
-            return True
-
-        except plivo.exceptions.ValidationError as e:
-            if _is_invalid_url_error(e) and time.monotonic() < deadline:
-                if not waiting_logged:
-                    logger.info(
-                        f"Waiting for Plivo to accept {PUBLIC_URL} (a new tunnel hostname can "
-                        f"take a minute to resolve); retrying every "
-                        f"{TUNNEL_URL_RETRY_INTERVAL_S:.0f}s..."
-                    )
-                    waiting_logged = True
-                time.sleep(TUNNEL_URL_RETRY_INTERVAL_S)
-                continue
-            logger.error(f"Plivo validation error: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Failed to configure Plivo: {e}")
-            return False
-
-
-# =============================================================================
 # Routes
 # =============================================================================
 
@@ -446,23 +360,28 @@ async def health_check() -> dict:
     phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
     return {
         "status": "ok",
-        "service": "gptlive1.1-native-no-vad-inbound",
+        "service": "gptlive1.1-native-outbound",
         "phone_number": f"+{phone}" if phone else "not configured",
     }
 
 
-@app.get("/answer", dependencies=PLIVO_SIGNED)
-@app.post("/answer", dependencies=PLIVO_SIGNED)
-async def answer_webhook(
+@app.get("/outbound/answer", dependencies=PLIVO_SIGNED)
+@app.post("/outbound/answer", dependencies=PLIVO_SIGNED)
+async def outbound_answer_webhook(
     request: Request,
     CallUUID: str = Query(default=""),
     From: str = Query(default=""),
     To: str = Query(default=""),
 ) -> Response:
-    """Plivo answer webhook - returns XML to start WebSocket audio streaming."""
+    """Plivo answer webhook for a call placed with the Make Call API.
+
+    The answer_url query string may carry the ``greeting``. It travels to /ws in the base64
+    ``body`` of the <Stream> URL together with the Plivo call fields.
+    """
     call_uuid = CallUUID
     from_number = From
     to_number = To
+    greeting = request.query_params.get(GREETING_PARAM, "").strip()
 
     parent_call_uuid = ""
     sip_headers = {}
@@ -472,15 +391,16 @@ async def answer_webhook(
             call_uuid = call_uuid or str(form_data.get("CallUUID", ""))
             from_number = from_number or str(form_data.get("From", ""))
             to_number = to_number or str(form_data.get("To", ""))
-            parent_call_uuid = parent_call_uuid or str(form_data.get("ParentCallUUID", ""))
+            parent_call_uuid = str(form_data.get("ParentCallUUID", ""))
             for key in form_data:
                 if key.startswith("SIP-") or key.startswith("sip-"):
                     sip_headers[key] = str(form_data.get(key, ""))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not parse answer webhook form: {e}")
 
     logger.bind(call_id=call_uuid).info(
-        f"Incoming call: CallUUID={call_uuid}, From={from_number}, To={to_number}"
+        f"Outbound call answered: CallUUID={call_uuid}, To={to_number}, "
+        f"greeting: {'from answer_url' if greeting else 'default'}"
     )
 
     body_data = {
@@ -489,9 +409,10 @@ async def answer_webhook(
         "to": to_number,
         "parent_call_uuid": parent_call_uuid,
         "sip_headers": sip_headers,
+        GREETING_PARAM: greeting,
     }
     ws_url = stream_url(body_data)
-    logger.info(f"WebSocket URL: {ws_url.split('?')[0]}")
+    logger.info(f"Outbound WebSocket URL: {ws_url.split('?')[0]}")
 
     response = plivoxml.ResponseElement()
     stream = plivoxml.StreamElement(
@@ -505,47 +426,21 @@ async def answer_webhook(
     return Response(content=response.to_string(), media_type="application/xml")
 
 
-@app.post("/hangup", dependencies=PLIVO_SIGNED)
-async def hangup_webhook(request: Request) -> Response:
-    """Plivo hangup webhook - called when a call ends."""
+@app.post("/outbound/hangup", dependencies=PLIVO_SIGNED)
+async def outbound_hangup_webhook(request: Request) -> Response:
+    """Plivo hangup webhook - called when an outbound call ends."""
     try:
         form_data = await request.form()
         call_uuid = str(form_data.get("CallUUID", ""))
         logger.bind(call_id=call_uuid).info(
-            f"Call ended: CallUUID={call_uuid}, "
+            f"Outbound call ended: CallUUID={call_uuid}, "
             f"Duration={form_data.get('Duration')}s, "
             f"HangupCause={form_data.get('HangupCause')}"
         )
     except Exception as e:
-        logger.warning(f"Error parsing hangup webhook: {e}")
+        logger.warning(f"Error parsing outbound hangup webhook: {e}")
 
     return Response(content="OK", media_type="text/plain")
-
-
-@app.post("/fallback", dependencies=PLIVO_SIGNED)
-async def fallback_webhook() -> Response:
-    """Fallback webhook if primary answer webhook fails."""
-    logger.warning("Fallback webhook triggered")
-
-    response = plivoxml.ResponseElement()
-    response.add(
-        plivoxml.SpeakElement(
-            "We're sorry, but we're experiencing technical difficulties. Please try again later.",
-            voice="Polly.Joanna",
-        )
-    )
-    response.add(plivoxml.HangupElement())
-
-    return Response(content=response.to_string(), media_type="application/xml")
-
-
-@app.get("/hold", dependencies=PLIVO_SIGNED)
-@app.post("/hold", dependencies=PLIVO_SIGNED)
-async def hold_webhook() -> Response:
-    """Hold endpoint - keeps call alive silently (used during testing)."""
-    response = plivoxml.ResponseElement()
-    response.add(plivoxml.WaitElement(length=120))
-    return Response(content=response.to_string(), media_type="application/xml")
 
 
 @app.websocket("/ws", dependencies=PLIVO_SIGNED)
@@ -593,6 +488,7 @@ async def websocket_endpoint(
             parent_call_id=call_data.get("parent_call_uuid", ""),
             sip_headers=call_data.get("sip_headers"),
             hangup_callback=functools.partial(_hangup_call, call_id),
+            greeting=str(call_data.get(GREETING_PARAM) or ""),
         )
 
     except WebSocketDisconnect:
@@ -623,17 +519,6 @@ def _start_tunnel() -> None:
     logger.info(f"Tunnel up: {url} -> http://localhost:{SERVER_PORT}")
 
 
-def _configure_plivo_for_tunnel(phone: str) -> None:
-    """Background: wait until Plivo accepts the tunnel URL, then point the number at it."""
-    if configure_plivo_webhooks(wait_for_url_s=TUNNEL_URL_ACCEPT_TIMEOUT_S):
-        _ready.plivo_configured(phone)
-    else:
-        logger.warning(
-            f"Plivo did not accept {PUBLIC_URL} within {TUNNEL_URL_ACCEPT_TIMEOUT_S:.0f}s. "
-            "Restart with --tunnel to get a new URL, or use a fixed PUBLIC_URL"
-        )
-
-
 def describe_openai_agent() -> str:
     """One line naming the models in use. Reads agent.py constants; no network calls."""
     return (
@@ -649,17 +534,17 @@ def check_openai_config() -> None:
 
 
 def main() -> None:
-    """Run the inbound server."""
-    parser = argparse.ArgumentParser(description="OpenAI GPT-Live inbound server")
+    """Run the outbound server."""
+    parser = argparse.ArgumentParser(description="OpenAI GPT-Live outbound server")
     parser.add_argument(
         "--tunnel",
         action="store_true",
         help="expose the server via a free Cloudflare quick tunnel (requires cloudflared) "
-        "and use it as PUBLIC_URL; no ngrok or PUBLIC_URL needed",
+        "and use it as PUBLIC_URL in the answer/hangup URLs you pass to Plivo",
     )
     args = parser.parse_args()
 
-    logger.info(f"Starting OpenAI GPT-Live Inbound Agent on port {SERVER_PORT}")
+    logger.info(f"Starting OpenAI GPT-Live Outbound Agent on port {SERVER_PORT}")
     check_webhook_auth_config()
     logger.info(describe_openai_agent())
     check_openai_config()
@@ -668,23 +553,10 @@ def main() -> None:
         _start_tunnel()
     if not PUBLIC_URL:
         logger.warning(
-            "PUBLIC_URL is not set: Plivo webhooks will be rejected (403) because their "
-            "signatures are checked against PUBLIC_URL. Set PUBLIC_URL or use --tunnel"
+            "PUBLIC_URL is not set: Plivo cannot reach /outbound/answer, and signed webhooks "
+            "are rejected (403) because signatures are checked against PUBLIC_URL. "
+            "Set PUBLIC_URL or use --tunnel"
         )
-
-    if PLIVO_PHONE_NUMBER and PUBLIC_URL:
-        logger.info("Configuring Plivo webhooks...")
-        phone = normalize_phone_number(PLIVO_PHONE_NUMBER)
-        if args.tunnel:
-            # Serve calls right away; the number is pointed here once Plivo accepts the URL
-            threading.Thread(target=_configure_plivo_for_tunnel, args=(phone,), daemon=True).start()
-        elif configure_plivo_webhooks():
-            _ready.plivo_configured(phone)  # logged once uvicorn accepts connections
-        else:
-            logger.warning("Plivo auto-configuration failed. Configure manually.")
-    else:
-        logger.info("To enable auto-configuration, set PUBLIC_URL and PLIVO_PHONE_NUMBER")
-
     uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT, log_level="info")
 
 

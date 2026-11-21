@@ -23,7 +23,7 @@ Run through EVERY item. Report PASS or FAIL with details for each.
 
 #### Naming (1 check)
 
-0. **Directory name follows convention**: Must match `{provider}-...-{orchestration}[-{variant}]` where orchestration is `native|pipecat|livekit|vapi` and variant (if present) is `no-vad|webrtcvad`. For a **managed platform**, the name is `{provider}-{product}[-{variant}]`: verify `{product}` matches the platform's own branding and flag any variant for human approval (VAD checks do not apply; `clearAudio` on the platform's interruption event does)
+0. **Directory name follows convention**: Must match `{provider}-...-{orchestration}[-{variant}]` where orchestration is `native|pipecat|livekit|vapi` and variant (if present) names a client-side VAD model: `silerovad|webrtcvad`. For an **S2S example** (CLAUDE.md "S2S examples and VAD naming"): fail any `-no-vad` / "no VAD" wording in the name, README title or package name; a bare name must have no client-side VAD code; a client-side VAD must be named in the directory name and described in the README demo description; `pyproject.toml` declares `category = "s2s"`. For a **managed platform**, the name is `{provider}-{product}[-{variant}]`: verify `{product}` matches the platform's own branding and flag any variant for human approval (VAD checks do not apply; `clearAudio` on the platform's interruption event does)
 
 #### Structure (8 checks)
 
@@ -49,7 +49,7 @@ Run through EVERY item. Report PASS or FAIL with details for each.
 14. **playAudio format correct**: `contentType: "audio/x-mulaw"`, `sampleRate: 8000`, base64 payload (framework: normally emitted by the framework's transport, so check it only if the agent builds the message itself; a comment mentioning the format does not count)
 15. **Stream XML correct**: `bidirectional=True`, `keepCallAlive=True`, `contentType="audio/x-mulaw;rate=8000"`
 16. **Sample rates correct**: Check `plivo_to_{api}()` and `{api}_to_plivo()` use correct rates (native and managed platform; documented pass-throughs when the API is μ-law 8kHz end to end, reference `deepgram-voiceagent/utils.py`). Framework or hosted: skip unless the example's own code converts audio, then check the helpers it calls
-16b. **utils.py helpers match who converts audio** (CLAUDE.md "utils.py Requirements" table): native has the codec set, both direction wrappers and (unless `-no-vad` / `-webrtcvad`) `plivo_to_vad` + `SileroVADProcessor`; a framework example whose serializer/transport converts, or a hosted one whose audio never reaches this server, has only `normalize_phone_number` and no unused helpers or `numpy`/`scipy` deps for them; no example imports `audioop`, calls a resampler or defines its own μ-law/resample function in `agent.py` / `server.py`
+16b. **utils.py helpers match who converts audio** (CLAUDE.md "utils.py Requirements" table): native has the codec set, both direction wrappers and (when it runs Silero VAD: cascaded native, or S2S `-silerovad`) `plivo_to_vad` + `SileroVADProcessor`; a framework example whose serializer/transport converts, or a hosted one whose audio never reaches this server, has only `normalize_phone_number` and no unused helpers or `numpy`/`scipy` deps for them; no example imports `audioop`, calls a resampler or defines its own μ-law/resample function in `agent.py` / `server.py`
 
 #### VAD (4 checks — native only, skip for framework)
 

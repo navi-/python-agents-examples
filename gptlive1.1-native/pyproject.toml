@@ -37,6 +37,11 @@ dev = [
     "opentelemetry-sdk>=1.20.0",
 ]
 
+# Example category (read by scripts/validate-example.sh). A speech-to-speech model detects
+# turns itself; a client-side VAD would be named in the directory name (CLAUDE.md "Variants").
+[tool.voice-agent-example]
+category = "s2s"
+
 [tool.ruff]
 exclude = [".git", "*_pb2.py"]
 line-length = 100

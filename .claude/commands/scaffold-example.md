@@ -32,7 +32,8 @@ Before creating any files, verify `{example-name}` follows the naming convention
 Examples: `gpt5.4-assemblyaiu3-cartesiasonic3-native`, `gemini2.5-live-pipecat`, `gpt4.1-deepgramnova3-elevenflashv2.5-native`
 
 - Must end with a known orchestration type: `native`, `pipecat`, `livekit`, `vapi`
-- If a variant suffix follows the orchestration type, it must be a known variant: `no-vad`, `webrtcvad`
+- If a variant suffix follows the orchestration type, it must name a client-side VAD model: `silerovad`, `webrtcvad`
+- **S2S example** (see CLAUDE.md "S2S examples and VAD naming"): never use `-no-vad` or any "no VAD" wording in the name, title or package name. The bare name means the model's own turn detection; if the example runs a client-side VAD, the name ends with its model (`-silerovad` / `-webrtcvad`). Add `[tool.voice-agent-example]` `category = "s2s"` to `pyproject.toml`. If the user asks for a `-no-vad` name, propose the bare name instead
 - Unknown suffixes should be flagged — ask the user before proceeding
 
 **Managed voice-agent platform** (hosted product runs STT/LLM/TTS, turn detection and barge-in — see CLAUDE.md "Managed Voice-Agent Platforms"): the name is `{provider}-{product}[-{variant}]` instead, e.g. `deepgram-voiceagent`.

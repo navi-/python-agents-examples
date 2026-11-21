@@ -55,7 +55,9 @@ skip() {
 # Orchestration tokens from the naming convention. Anything other than "native" is a
 # framework: the framework (or hosted platform behind it) owns the audio transport and VAD.
 KNOWN_ORCH="native|pipecat|livekit|vapi"
-KNOWN_VARIANTS="no-vad|webrtcvad"
+# Variants name the client-side VAD model an example adds (silerovad, webrtcvad).
+# "no-vad" is a legacy token (gemini2.5-live-native-no-vad): new examples never use it.
+KNOWN_VARIANTS="no-vad|webrtcvad|silerovad"
 
 ORCHESTRATION="native"
 if [[ "$EXAMPLE" =~ -($KNOWN_ORCH)(-($KNOWN_VARIANTS))?$ ]]; then
@@ -73,10 +75,27 @@ fi
 if grep -Eq '^category *= *"managed-platform"' "$EXAMPLE_DIR/pyproject.toml" 2>/dev/null; then
     ORCHESTRATION="managed-platform"
 fi
+# Speech-to-speech examples declare themselves the same way:
+#   [tool.voice-agent-example]
+#   category = "s2s"
+# The S2S model detects turns itself, so the bare name ({model}-{orchestration}) means
+# no client-side VAD. A client-side VAD is named by its model: -silerovad / -webrtcvad.
+S2S=false
+if grep -Eq '^category *= *"s2s"' "$EXAMPLE_DIR/pyproject.toml" 2>/dev/null; then
+    S2S=true
+fi
+# The client-side VAD model named in the directory name ("" when none is named)
+NAMED_VAD=""
+if [[ "$EXAMPLE" =~ -(silerovad|webrtcvad)$ ]]; then
+    NAMED_VAD="${BASH_REMATCH[1]}"
+fi
 
 echo "=========================================="
 echo "Validating: $EXAMPLE"
 echo "Orchestration: $ORCHESTRATION"
+if $S2S; then
+    echo "Category: s2s (client-side VAD: ${NAMED_VAD:-none})"
+fi
 echo "=========================================="
 echo ""
 
@@ -112,6 +131,15 @@ elif [[ "$ORCHESTRATION" == "managed-platform" ]]; then
     fail "Directory name '$EXAMPLE' must be lowercase hyphen-separated {provider}-{product}[-{variant}]"
 else
     fail "Directory name '$EXAMPLE' does not follow naming convention ({provider}-...-{orchestration}[-{variant}])"
+fi
+
+# "no VAD" is not a property of a speech-to-speech example: its model detects turns.
+if $S2S; then
+    if [[ "$EXAMPLE" == *"-no-vad"* ]]; then
+        fail "S2S example names must not use '-no-vad': drop it (the bare name already means no client-side VAD)"
+    else
+        pass "S2S name does not use '-no-vad'"
+    fi
 fi
 
 echo ""
@@ -585,6 +613,24 @@ if [[ "$ORCHESTRATION" == "managed-platform" ]]; then
         pass "Barge-in handling (clearAudio on platform interruption event)"
     else
         fail "clearAudio not sent in inbound/agent.py (platform barge-in must flush Plivo playback)"
+    fi
+elif $S2S && [[ -z "$NAMED_VAD" ]]; then
+    # S2S with no VAD model in its name: the model owns turn detection, so no client-side
+    # VAD may be present. One that is present must be named (-silerovad / -webrtcvad).
+    vad_code=$(grep -lE "SileroVADProcessor|plivo_to_vad|webrtcvad|silero" \
+        "$EXAMPLE_DIR/utils.py" "$EXAMPLE_DIR/inbound/agent.py" "$EXAMPLE_DIR/outbound/agent.py" \
+        "$EXAMPLE_DIR/pyproject.toml" 2>/dev/null | xargs -r -n1 basename | sort -u | tr '\n' ' ' || true)
+    if [[ -z "$vad_code" ]]; then
+        pass "No client-side VAD code (S2S model owns turn detection; none is named)"
+    else
+        fail "Client-side VAD code found (${vad_code% }) but the name has no VAD model: add -silerovad or -webrtcvad"
+    fi
+    skip "SileroVADProcessor / plivo_to_vad / silero-vad dependency (S2S, no client-side VAD)"
+    # The model detects barge-in, but the client must still flush Plivo playback
+    if grep -q "clearAudio" "$EXAMPLE_DIR/inbound/agent.py" 2>/dev/null; then
+        pass "Barge-in handling (clearAudio flushes Plivo playback)"
+    else
+        fail "clearAudio not sent in inbound/agent.py (barge-in must flush Plivo playback)"
     fi
 elif [[ "$EXAMPLE" == *"-no-vad"* ]]; then
     skip "SileroVADProcessor (no-vad variant — uses server-side VAD)"
