@@ -18,14 +18,14 @@ Plivo bidirectional audio streaming bridged over raw `websockets` + asyncio (no 
 
 ## Verification status
 
-**This example has not been run against the live GPT-Live API yet**: no OpenAI key was available where it was written. It was built from OpenAI's published GPT-Live documentation (read 2026-11-21) and verified offline against `tests/fake_live.py`, a local server that speaks the documented wire protocol.
+**The GPT-Live WebSocket session itself has not been run against the live API yet**: the environment this example was written in could not open outbound WebSockets. It was built from OpenAI's published GPT-Live documentation (read 2026-11-21) and verified offline against `tests/fake_live.py`, a local server that speaks the documented wire protocol. Checked against the real API over HTTPS (2026-11-21): `gpt-live-1.1` and `gpt-6-luna` are available models; `gpt-6-luna` accepts this example's `DELEGATION_INSTRUCTIONS` and five function tools through the Responses API, returns a `function_call` output item (`call_id`, `name`, JSON-string `arguments`) and turns a `function_call_output` into one spoken-style sentence; the text-to-speech helper the e2e test uses for caller audio works.
 
 | Verified offline (155 unit + 7 local integration tests) | To confirm on the first live run |
 |---|---|
 | `session.start` shape, handshake, pre-start audio buffering | `gpt-live-1.1` accepts `audio/pcmu` at 8000 on the primary WebSocket (the schema allows it; no docs example uses it) |
 | μ-law pass-through, 160-byte `playAudio` framing | Whether output audio arrives in real time or in bursts (decides how often the barge-in flush fires) |
 | Turn segmentation from transcript deltas, structured events | How promptly `session.input_transcript.delta` follows caller speech |
-| Barge-in flush for burst and real-time delivery | The backend model id (`gpt-6-luna`) and the nested completion event name (`response.completed`) |
+| Barge-in flush for burst and real-time delivery | The nested completion event name inside `response.event` (`response.completed`; a 1 s fallback covers a different name) |
 | Delegated function calls, `end_call` hangup via checkpoint | Greeting wording: the model is instructed, not forced, to read it exactly |
 | Plivo signature checks on webhooks and `/ws`, outbound answer URL | `session.closed` usage fields |
 
